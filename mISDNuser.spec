@@ -9,6 +9,7 @@ License:	LGPL
 Group:		Libraries
 URL:		http://www.isdn4linux.de/mISDN/
 Source0:	http://www.misdn.org/downloads/releases/%{name}-1_0_3.tar.gz
+# Source0-md5:	c1c36841386222c2a35c110c8e63f3bc
 Patch0:		%{name}-build.patch
 BuildRequires:	mISDN-devel
 Requires:	kernel(mISDN)
