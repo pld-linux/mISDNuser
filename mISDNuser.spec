@@ -1,6 +1,4 @@
-
-%define         mISDNuser_version           %(echo %{version} |tr . _)
-
+%define		_ver	%(echo %{version} | tr . _)
 Summary:	Userspace part of Modular ISDN stack
 Name:		mISDNuser
 Version:	1.0.3
@@ -8,7 +6,7 @@ Release:	1
 License:	LGPL
 Group:		Libraries
 URL:		http://www.isdn4linux.de/mISDN/
-Source0:	http://www.misdn.org/downloads/releases/%{name}-1_0_3.tar.gz
+Source0:	http://www.misdn.org/downloads/releases/%{name}-%{_ver}.tar.gz
 # Source0-md5:	c1c36841386222c2a35c110c8e63f3bc
 Patch0:		%{name}-build.patch
 BuildRequires:	mISDN-devel
@@ -42,36 +40,38 @@ Linux 2.6 kernel, from the maintainer of the existing isdn4linux code.
 This package contains test utilities for mISDN.
 
 %prep
-%setup -q -n %{name}-%{mISDNuser_version}
+%setup -q -n %{name}-%{_ver}
 %patch0 -p0
 rm -rf voip
 
 %build
-%{__make} CFLAGS="-I`pwd`/include %{rpmcflags}" MISDNDIR=`pwd`
+%{__make} \
+	CFLAGS="-I`pwd`/include %{rpmcflags}" \
+	MISDNDIR=`pwd`
 
 %install
 rm -rf $RPM_BUILD_ROOT
-%{__make} install INSTALL_PREFIX=$RPM_BUILD_ROOT MISDNDIR=`pwd` LIBDIR=%_libdir
+%{__make} install \
+	INSTALL_PREFIX=$RPM_BUILD_ROOT \
+	MISDNDIR=`pwd` \
+	LIBDIR=%{_libdir}
 
 %clean
 rm -rf $RPM_BUILD_ROOT
 
-%post
-/sbin/ldconfig
-
-%postun
-/sbin/ldconfig
+%post	-p /sbin/ldconfig
+%postun	-p /sbin/ldconfig
 
 %files
 %defattr(644,root,root,755)
-%attr(755,root,root) %_libdir/*.so.*
+%attr(755,root,root) %{_libdir}/*.so.*
 %exclude %{_bindir}/*
 
 %files devel
 %defattr(644,root,root,755)
-%_includedir/mISDNuser
-%_libdir/*.so
-%exclude %_libdir/*.a
+%{_includedir}/mISDNuser
+%{_libdir}/*.so
+%exclude %{_libdir}/*.a
 
 %files utils
 %defattr(644,root,root,755)
