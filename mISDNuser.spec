@@ -1,6 +1,6 @@
 %define		_ver	%(echo %{version} | tr . _)
 Summary:	Userspace part of Modular ISDN stack
-Summary(pl.UTF-8):   Część stosu modularnego ISDN (mISDN) dla przestrzeni użytkonika
+Summary(pl.UTF-8):	Część stosu modularnego ISDN (mISDN) dla przestrzeni użytkonika
 Name:		mISDNuser
 Version:	1.0.3
 Release:	1
@@ -27,7 +27,7 @@ komunikacji z mISDN.
 
 %package devel
 Summary:	Development files Modular ISDN stack
-Summary(pl.UTF-8):   Pliki nagłówkowe stosu modularnego ISDN
+Summary(pl.UTF-8):	Pliki nagłówkowe stosu modularnego ISDN
 Group:		Libraries
 Requires:	%{name} = %{version}-%{release}
 
@@ -44,7 +44,7 @@ OpenPBX.
 
 %package utils
 Summary:	Debugging utilities for Modular ISDN stack
-Summary(pl.UTF-8):   Narzędzia diagnostyczne dla stosu modularnego ISDN
+Summary(pl.UTF-8):	Narzędzia diagnostyczne dla stosu modularnego ISDN
 Group:		Applications/System
 
 %description utils
