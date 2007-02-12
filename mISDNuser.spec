@@ -1,6 +1,6 @@
 %define		_ver	%(echo %{version} | tr . _)
 Summary:	Userspace part of Modular ISDN stack
-Summary(pl):	Czê¶æ stosu modularnego ISDN (mISDN) dla przestrzeni u¿ytkonika
+Summary(pl.UTF-8):   CzÄ™Å›Ä‡ stosu modularnego ISDN (mISDN) dla przestrzeni uÅ¼ytkonika
 Name:		mISDNuser
 Version:	1.0.3
 Release:	1
@@ -19,15 +19,15 @@ Linux 2.6 kernel, from the maintainer of the existing isdn4linux code.
 This package contains the userspace libraries required to interface
 directly to mISDN.
 
-%description -l pl
-mISDN (modularny ISDN) ma byæ nowym stosem ISDN dla j±dra Linuksa 2.6
+%description -l pl.UTF-8
+mISDN (modularny ISDN) ma byÄ‡ nowym stosem ISDN dla jÄ…dra Linuksa 2.6
 tworzonym przez maintainera obecnego kodu isdn4linux. Ten pakiet
-zawiera biblioteki przestrzeni u¿ytkownika potrzebne do bezpo¶redniej
+zawiera biblioteki przestrzeni uÅ¼ytkownika potrzebne do bezpoÅ›redniej
 komunikacji z mISDN.
 
 %package devel
 Summary:	Development files Modular ISDN stack
-Summary(pl):	Pliki nag³ówkowe stosu modularnego ISDN
+Summary(pl.UTF-8):   Pliki nagÅ‚Ã³wkowe stosu modularnego ISDN
 Group:		Libraries
 Requires:	%{name} = %{version}-%{release}
 
@@ -36,15 +36,15 @@ This package contains the development files for userspace libraries
 required to interface to mISDN, needed for compiling applications
 which use mISDN directly such as OpenPBX.
 
-%description devel -l pl
+%description devel -l pl.UTF-8
 Ten pakiet zawiera pliki programistyczne dla bibliotek przestrzeni
-u¿ytkownika s³u¿±cych do komunikacji z mISDN. Jest potrzebny do
-kompilacji aplikacji u¿ywaj±cych bezpo¶rednio mISDN, takich jak
+uÅ¼ytkownika sÅ‚uÅ¼Ä…cych do komunikacji z mISDN. Jest potrzebny do
+kompilacji aplikacji uÅ¼ywajÄ…cych bezpoÅ›rednio mISDN, takich jak
 OpenPBX.
 
 %package utils
 Summary:	Debugging utilities for Modular ISDN stack
-Summary(pl):	Narzêdzia diagnostyczne dla stosu modularnego ISDN
+Summary(pl.UTF-8):   NarzÄ™dzia diagnostyczne dla stosu modularnego ISDN
 Group:		Applications/System
 
 %description utils
@@ -52,10 +52,10 @@ mISDN (modular ISDN) is intended to be the new ISDN stack for the
 Linux 2.6 kernel, from the maintainer of the existing isdn4linux code.
 This package contains test utilities for mISDN.
 
-%description utils -l pl
-mISDN (modularny ISDN) ma byæ nowym stosem ISDN dla j±dra Linuksa 2.6
+%description utils -l pl.UTF-8
+mISDN (modularny ISDN) ma byÄ‡ nowym stosem ISDN dla jÄ…dra Linuksa 2.6
 tworzonym przez maintainera obecnego kodu isdn4linux. Ten pakiet
-zawiera narzêdzia testowe dla mISDN.
+zawiera narzÄ™dzia testowe dla mISDN.
 
 %prep
 %setup -q -n %{name}-%{_ver}
