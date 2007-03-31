@@ -2,15 +2,15 @@
 Summary:	Userspace part of Modular ISDN stack
 Summary(pl.UTF-8):	Część stosu modularnego ISDN (mISDN) dla przestrzeni użytkonika
 Name:		mISDNuser
-Version:	1.0.3
+Version:	1.1.1
 Release:	1
 License:	LGPL
 Group:		Libraries
 Source0:	http://www.misdn.org/downloads/releases/%{name}-%{_ver}.tar.gz
-# Source0-md5:	c1c36841386222c2a35c110c8e63f3bc
+# Source0-md5:	701898911fc036dd4167f6eec4b1f082
 Patch0:		%{name}-build.patch
 URL:		http://www.isdn4linux.de/mISDN/
-BuildRequires:	mISDN-devel
+BuildRequires:	mISDN-devel >= 1.1.1
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %description
