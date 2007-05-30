@@ -33,9 +33,9 @@ diff -u -p -r1.7 Makefile
  	$(RANLIB) $@
  
 -libisdnnet.so: $(ISDNNET_OBJ)
--	$(CC) -shared -Xlinker -x -o $@ $^
+-	$(CC) $(CFLAGS) -shared -Xlinker -x -o $@ $^
 +libisdnnet.so.$(SOVERSION): $(ISDNNET_PICOBJ)
-+	$(CC) -shared -Xlinker -x -Wl,-soname,libisdnnet.so.$(SOMAJOR) -o $@ $^
++	$(CC) $(CFLAGS) -shared -Xlinker -x -Wl,-soname,libisdnnet.so.$(SOMAJOR) -o $@ $^
  
  .c.o:
  	$(CC) $(CFLAGS) -o $@ -c $<
@@ -74,9 +74,9 @@ diff -u -p -r1.8 Makefile
  	$(RANLIB) $@
  
 -libmISDN.so: $(LIBMISDN_OBJS)
--	$(CC) -shared -Xlinker -x -o $@ $^
+-	$(CC) $(CFLAGS) -shared -Xlinker -x -o $@ $^
 +libmISDN.so.$(SOVERSION): $(LIBMISDN_PICOBJS)
-+	$(CC) -shared -Xlinker -x  -Wl,-soname,libmISDN.so.$(SOMAJOR) -o $@ $^
++	$(CC) $(CFLAGS) -shared -Xlinker -x  -Wl,-soname,libmISDN.so.$(SOMAJOR) -o $@ $^
  
  .c.o:
  	$(CC) $(CFLAGS) -o $@ -c $<
@@ -119,7 +119,7 @@ diff -u -p -r1.7 Makefile
 -libsuppserv.so: $(SUPPSERV_OBJ)
 -	$(CC) -shared -Xlinker -x -o $@ $^
 +libsuppserv.so.$(SOVERSION): $(SUPPSERV_PICOBJ)
-+	$(CC) -shared -Xlinker -x -Wl,-soname,libsuppserv.so.$(SOMAJOR) -o $@ $^
++	$(CC) $(CFLAGS) -shared -Xlinker -x -Wl,-soname,libsuppserv.so.$(SOMAJOR) -o $@ $^
  
  
  .c.o:
