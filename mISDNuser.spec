@@ -63,7 +63,8 @@ zawiera narzędzia testowe dla mISDN.
 rm -rf voip
 
 %build
-%{__make} \
+%{__make} -j1 \
+	CC="%{__cc}" \
 	CFLAGS="-I`pwd`/include %{rpmcflags}" \
 	MISDNDIR=`pwd`
 
