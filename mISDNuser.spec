@@ -30,6 +30,7 @@ Summary:	Development files Modular ISDN stack
 Summary(pl.UTF-8):	Pliki nagłówkowe stosu modularnego ISDN
 Group:		Libraries
 Requires:	%{name} = %{version}-%{release}
+Requires:	mISDN-devel
 
 %description devel
 This package contains the development files for userspace libraries
