@@ -7,7 +7,7 @@ Release:	1
 License:	LGPL
 Group:		Libraries
 Source0:	http://www.misdn.org/downloads/releases/%{name}-%{_ver}.tar.gz
-# Source0-md5:	275811946d88f2cea9731b4fcfe44286
+# Source0-md5:	7cf66625608736eb939cfcb2308f3edf
 Patch0:		%{name}-build.patch
 URL:		http://www.isdn4linux.de/mISDN/
 BuildRequires:	mISDN-devel >= %{version}
