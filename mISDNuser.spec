@@ -2,7 +2,7 @@
 Summary:	Userspace part of Modular ISDN stack
 Summary(pl.UTF-8):	Część stosu modularnego ISDN (mISDN) dla przestrzeni użytkonika
 Name:		mISDNuser
-Version:	1.1.7.2
+Version:	1.1.8
 Release:	1
 License:	LGPL
 Group:		Libraries
