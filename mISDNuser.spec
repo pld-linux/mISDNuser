@@ -1,8 +1,8 @@
-%define		_ver	%(echo %{version} | tr . _)
+%define		_ver	%(echo %{version} | tr . _).1
 Summary:	Userspace part of Modular ISDN stack
 Summary(pl.UTF-8):	Część stosu modularnego ISDN (mISDN) dla przestrzeni użytkonika
 Name:		mISDNuser
-Version:	1.1.8
+Version:	1.1.9
 Release:	1
 License:	LGPL
 Group:		Libraries
