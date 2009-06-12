@@ -1,125 +1,47 @@
-Index: i4lnet/Makefile
-===================================================================
-RCS file: /i4ldev/mISDNuser/i4lnet/Makefile,v
-retrieving revision 1.7
-diff -u -p -r1.7 Makefile
---- i4lnet/Makefile	18 Oct 2006 12:32:20 -0000	1.7
-+++ i4lnet/Makefile	16 Dec 2006 16:24:07 -0000
-@@ -2,12 +2,18 @@ CC = gcc
+diff -durN -x '*~' mISDNuser.orig/Makefile mISDNuser/Makefile
+--- mISDNuser.orig/Makefile	2008-09-18 08:14:29.000000000 +0200
++++ mISDNuser/Makefile	2009-06-12 20:21:25.000000000 +0200
+@@ -36,7 +36,7 @@
+ 
+ export CFLAGS
+ 
+-SUBDIRS := lib bridge tools example l1oip
++SUBDIRS := lib bridge tools l1oip
+ 
+ 
+ all:
+diff -durN -x '*~' mISDNuser.orig/lib/Makefile mISDNuser/lib/Makefile
+--- mISDNuser.orig/lib/Makefile	2008-09-18 08:14:29.000000000 +0200
++++ mISDNuser/lib/Makefile	2009-06-12 20:21:12.000000000 +0200
+@@ -2,13 +2,18 @@
  AR = ar
  RANLIB = ranlib
  
--all: libisdnnet.a libisdnnet_pic.a libisdnnet.so
+-all: libmisdn.a libmisdn_pic.a libmisdn.so
 +SOMAJOR=0
 +SOMINOR=0.0
 +SOVERSION=$(SOMAJOR).$(SOMINOR)
 +
-+all: libisdnnet.a libisdnnet_pic.a libisdnnet.so.$(SOVERSION)
++all: libmisdn.a libmisdn_pic.a libmisdn.so.$(SOVERSION)
  
  install:
--	install -m 644 libisdnnet.a $(INSTALL_PREFIX)/usr/lib
--	install -m 644 libisdnnet_pic.a $(INSTALL_PREFIX)/usr/lib
--	install -m 644 libisdnnet.so $(INSTALL_PREFIX)/usr/lib
-+	install -m 644 libisdnnet.a $(INSTALL_PREFIX)/$(LIBDIR)
-+	install -m 644 libisdnnet_pic.a $(INSTALL_PREFIX)/$(LIBDIR)
-+	install -m 755 libisdnnet.so.$(SOVERSION) $(INSTALL_PREFIX)/$(LIBDIR)
-+	ln -sf libisdnnet.so.$(SOVERSION) $(INSTALL_PREFIX)/$(LIBDIR)/libisdnnet.so.$(SOMAJOR)
-+	ln -sf libisdnnet.so.$(SOVERSION) $(INSTALL_PREFIX)/$(LIBDIR)/libisdnnet.so
- 	cp *.h $(INSTALL_PREFIX)/usr/include/mISDNuser/
+ 	install -d $(INSTALL_PREFIX)$(INSTALL_LIBDIR)
+ 	install -m 644 libmisdn.a $(INSTALL_PREFIX)$(INSTALL_LIBDIR)
+ 	install -m 644 libmisdn_pic.a $(INSTALL_PREFIX)$(INSTALL_LIBDIR)
+-	install -m 644 libmisdn.so $(INSTALL_PREFIX)$(INSTALL_LIBDIR)
++	install -m 644 libmisdn.so.$(SOVERSION) $(INSTALL_PREFIX)$(INSTALL_LIBDIR)
++	ln -s libmisdn.so.$(SOVERSION) $(INSTALL_PREFIX)$(INSTALL_LIBDIR)/libmisdn.so
  
- ISDNNET_OBJ = net_if.o isdn_debug.o isdn_msg.o fsm.o net_l2.o tei.o net_l3.o \
-@@ -22,8 +28,8 @@ libisdnnet.a: $(ISDNNET_OBJ)
+ MISDN_OBJ = debug.o mbuffer.o q931.o fsm.o mtimer.o mlayer3.o layer3.o dss1user.o dss1net.o
+ 
+@@ -29,8 +34,8 @@
  	$(AR) cru $@ $^
  	$(RANLIB) $@
  
--libisdnnet.so: $(ISDNNET_OBJ)
+-libmisdn.so: $(MISDN_OBJ)
 -	$(CC) $(CFLAGS) -shared -Xlinker -x -o $@ $^
-+libisdnnet.so.$(SOVERSION): $(ISDNNET_PICOBJ)
-+	$(CC) $(CFLAGS) -shared -Xlinker -x -Wl,-soname,libisdnnet.so.$(SOMAJOR) -o $@ $^
++libmisdn.so.$(SOVERSION): $(MISDN_OBJ)
++	$(CC) $(CFLAGS) -shared -Xlinker -x -Wl,-soname,libmisdn.so.$(SOMAJOR) -o $@ $^
  
  .c.o:
  	$(CC) $(CFLAGS) -o $@ -c $<
-Index: lib/Makefile
-===================================================================
-RCS file: /i4ldev/mISDNuser/lib/Makefile,v
-retrieving revision 1.8
-diff -u -p -r1.8 Makefile
---- lib/Makefile	18 Oct 2006 07:10:23 -0000	1.8
-+++ lib/Makefile	16 Dec 2006 16:24:07 -0000
-@@ -2,12 +2,18 @@ CC = gcc
- AR = ar
- RANLIB = ranlib
- 
--all: libmISDN.a libmISDN_pic.a libmISDN.so
-+SOMAJOR=0
-+SOMINOR=0.0
-+SOVERSION=$(SOMAJOR).$(SOMINOR)
-+
-+all: libmISDN.a libmISDN_pic.a libmISDN.so.$(SOVERSION)
- 
- install:
--	install -m 644 libmISDN.so $(INSTALL_PREFIX)/usr/lib
--	install -m 644 libmISDN_pic.a $(INSTALL_PREFIX)/usr/lib
--	install -m 644 libmISDN.a $(INSTALL_PREFIX)/usr/lib
-+	install -m 755 libmISDN.so.$(SOVERSION) $(INSTALL_PREFIX)/$(LIBDIR)
-+	ln -sf libmISDN.so.$(SOVERSION) $(INSTALL_PREFIX)/$(LIBDIR)/libmISDN.so.$(SOMAJOR)
-+	ln -sf libmISDN.so.$(SOVERSION) $(INSTALL_PREFIX)/$(LIBDIR)/libmISDN.so
-+	install -m 644 libmISDN_pic.a $(INSTALL_PREFIX)/$(LIBDIR)
-+	install -m 644 libmISDN.a $(INSTALL_PREFIX)/$(LIBDIR)
- 
- LIBMISDN_OBJS = device.o layer.o stack.o status.o
- LIBMISDN_PICOBJS = $(LIBMISDN_OBJS:%.o=%.lo)
-@@ -20,8 +26,8 @@ libmISDN.a: $(LIBMISDN_OBJS)
- 	$(AR) cru $@ $^
- 	$(RANLIB) $@
- 
--libmISDN.so: $(LIBMISDN_OBJS)
--	$(CC) $(CFLAGS) -shared -Xlinker -x -o $@ $^
-+libmISDN.so.$(SOVERSION): $(LIBMISDN_PICOBJS)
-+	$(CC) $(CFLAGS) -shared -Xlinker -x  -Wl,-soname,libmISDN.so.$(SOMAJOR) -o $@ $^
- 
- .c.o:
- 	$(CC) $(CFLAGS) -o $@ -c $<
-Index: suppserv/Makefile
-===================================================================
-RCS file: /i4ldev/mISDNuser/suppserv/Makefile,v
-retrieving revision 1.7
-diff -u -p -r1.7 Makefile
---- suppserv/Makefile	18 Oct 2006 12:32:21 -0000	1.7
-+++ suppserv/Makefile	16 Dec 2006 16:24:07 -0000
-@@ -7,14 +7,20 @@ RANLIB = ranlib
- SUPPSERV_OBJ = asn1.o asn1_enc.o asn1_generic.o asn1_aoc.o asn1_basic_service.o asn1_comp.o asn1_diversion.o asn1_address.o fac.o
- SUPPSERV_PICOBJ = $(SUPPSERV_OBJ:%.o=%.lo)
- 
--all: libsuppserv.a libsuppserv_pic.a libsuppserv.so
-+SOMAJOR=0
-+SOMINOR=0.0
-+SOVERSION=$(SOMAJOR).$(SOMINOR)
-+
-+all: libsuppserv.a libsuppserv_pic.a libsuppserv.so.$(SOVERSION)
- 
- main: $(SUPPSERVOBJ)
- 
- install:
--	install -m 644 libsuppserv.a $(INSTALL_PREFIX)/usr/lib
--	install -m 644 libsuppserv_pic.a $(INSTALL_PREFIX)/usr/lib
--	install -m 644 libsuppserv.so $(INSTALL_PREFIX)/usr/lib
-+	install -m 644 libsuppserv.a $(INSTALL_PREFIX)/$(LIBDIR)
-+	install -m 644 libsuppserv_pic.a $(INSTALL_PREFIX)/$(LIBDIR)
-+	install -m 755 libsuppserv.so.$(SOVERSION) $(INSTALL_PREFIX)/$(LIBDIR)
-+	ln -sf libsuppserv.so.$(SOVERSION) $(INSTALL_PREFIX)/$(LIBDIR)/libsuppserv.so.$(SOMAJOR)
-+	ln -sf libsuppserv.so.$(SOVERSION) $(INSTALL_PREFIX)/$(LIBDIR)/libsuppserv.so
- 	cp *.h $(INSTALL_PREFIX)/usr/include/mISDNuser/
- 
- libsuppserv_pic.a: $(SUPPSERV_PICOBJ)
-@@ -25,8 +31,8 @@ libsuppserv.a: $(SUPPSERV_OBJ)
- 	$(AR) cru $@ $<
- 	$(RANLIB) $@
- 
--libsuppserv.so: $(SUPPSERV_OBJ)
--	$(CC) -shared -Xlinker -x -o $@ $^
-+libsuppserv.so.$(SOVERSION): $(SUPPSERV_PICOBJ)
-+	$(CC) $(CFLAGS) -shared -Xlinker -x -Wl,-soname,libsuppserv.so.$(SOMAJOR) -o $@ $^
- 
- 
- .c.o:
