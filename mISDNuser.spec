@@ -9,7 +9,7 @@ Group:		Libraries
 Source0:	http://www.linux-call-router.de/download/lcr-1.5/%{name}_%{_snap}.tar.gz
 # Source0-md5:	3288ec912031e5840f2d07134ab8d3d6
 Patch0:		%{name}-build.patch
-URL:		http://www.isdn4linux.de/mISDN/
+URL:		http://www.misdn.org/
 BuildRequires:	linux-libc-headers >= 2.6.29
 BuildConflicts:	mISDN-devel < 2.0
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
