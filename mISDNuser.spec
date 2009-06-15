@@ -10,21 +10,21 @@ Source0:	http://www.linux-call-router.de/download/lcr-1.5/%{name}_%{_snap}.tar.g
 # Source0-md5:	3288ec912031e5840f2d07134ab8d3d6
 Patch0:		%{name}-build.patch
 URL:		http://www.misdn.org/
-BuildRequires:	linux-libc-headers >= 2.6.29
+BuildRequires:	linux-libc-headers >= 2.6.27
 BuildConflicts:	mISDN-devel < 2.0
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %description
 mISDN (modular ISDN) is the new ISDN stack for the Linux 2.6 kernel,
 from the maintainer of the existing isdn4linux code. mISDN v2 has been
-included in the mainline kernel since 2.6.29. This package contains
+included in the mainline kernel since 2.6.27. This package contains
 the userspace libraries required to interface directly to mISDN.
 
 %description -l pl.UTF-8
 mISDN (modularny ISDN) jest nowym stosem ISDN dla jądra Linuksa 2.6
 tworzonym przez maintainera obecnego kodu isdn4linux. Wersja druga
 mISDN jest już włączona do oficjalnego kodu jądra, od wersji
-2.6.29. Ten pakiet zawiera biblioteki przestrzeni użytkownika
+2.6.27. Ten pakiet zawiera biblioteki przestrzeni użytkownika
 potrzebne do bezpośredniej komunikacji z mISDN.
 
 %package devel
@@ -32,7 +32,7 @@ Summary:	Development files Modular ISDN stack
 Summary(pl.UTF-8):	Pliki nagłówkowe stosu modularnego ISDN
 Group:		Libraries
 Requires:	%{name} = %{version}-%{release}
-Requires:	linux-libc-headers >= 2.6.29
+Requires:	linux-libc-headers >= 2.6.27
 
 %description devel
 This package contains the development files for userspace libraries
