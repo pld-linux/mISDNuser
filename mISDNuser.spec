@@ -1,6 +1,6 @@
 %define		_ver	%(echo %{version} | tr . _).1
 Summary:	Userspace part of Modular ISDN stack
-Summary(pl.UTF-8):	Część stosu modularnego ISDN (mISDN) dla przestrzeni użytkonika
+Summary(pl.UTF-8):	Część stosu modularnego ISDN (mISDN) dla przestrzeni użytkownika
 Name:		mISDNuser
 Version:	1.1.9
 Release:	1
@@ -84,13 +84,29 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(644,root,root,755)
-%attr(755,root,root) %{_libdir}/*.so.*
+%attr(755,root,root) %{_libdir}/libisdnnet.so.*.*.*
+%attr(755,root,root) %ghost %{_libdir}/libisdnnet.so.0
+%attr(755,root,root) %{_libdir}/libmISDN.so.*.*.*
+%attr(755,root,root) %ghost %{_libdir}/libmISDN.so.0
+%attr(755,root,root) %{_libdir}/libsuppserv.so.*.*.*
+%attr(755,root,root) %ghost %{_libdir}/libsuppserv.so.0
 
 %files devel
 %defattr(644,root,root,755)
-%attr(755,root,root) %{_libdir}/*.so
+%attr(755,root,root) %{_libdir}/libisdnnet.so
+%attr(755,root,root) %{_libdir}/libmISDN.so
+%attr(755,root,root) %{_libdir}/libsuppserv.so
 %{_includedir}/mISDNuser
 
 %files utils
 %defattr(644,root,root,755)
-%attr(755,root,root) %{_bindir}/*
+%attr(755,root,root) %{_bindir}/loadfirm
+%attr(755,root,root) %{_bindir}/mISDNdebugtool
+%attr(755,root,root) %{_bindir}/misdnportinfo
+%attr(755,root,root) %{_bindir}/sendhwctrl
+%attr(755,root,root) %{_bindir}/testcon
+%attr(755,root,root) %{_bindir}/testcon_l2
+%attr(755,root,root) %{_bindir}/testlayer1
+%attr(755,root,root) %{_bindir}/testlayer3
+%attr(755,root,root) %{_bindir}/testlib
+%attr(755,root,root) %{_bindir}/tstlib
