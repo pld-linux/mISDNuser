@@ -15,10 +15,11 @@ Group:		Libraries
 # git archive --format=tar --prefix=mISDNuser-2.0.19/ v2.0.19 | xz > ../mISDNuser-2.0.19.tar.xz
 Source0:	%{name}-%{version}.tar.xz
 # Source0-md5:	fb4bf6c110bea0a30486015ca56e80d8
+Patch0:		git.patch
 URL:		http://www.isdn4linux.de/mISDN/
 BuildRequires:	autoconf >= 2.63
 BuildRequires:	automake
-%{?with_capi:BuildRequires:	capi4k-utils-devel}
+%{?with_capi:BuildRequires:	capi4k-utils-devel >= 3:3.27}
 BuildRequires:	libtool >= 2:2
 %{?with_capi:BuildRequires:	spandsp-devel}
 BuildRequires:	tar >= 1:1.22
@@ -113,6 +114,7 @@ Aplikacja z graficznym interfejsem użytkownika do mISDN.
 
 %prep
 %setup -q
+#%patch0 -p1
 
 %build
 %{__libtoolize}

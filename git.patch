@@ -1,0 +1,3099 @@
+diff --git a/capi20/Makefile.am b/capi20/Makefile.am
+index 38d1cfb..a7c0f7b 100644
+--- a/capi20/Makefile.am
++++ b/capi20/Makefile.am
+@@ -20,14 +20,10 @@ EXTRA_DIST = capi20.conf.sample
+ 
+ CLEANFILES = *~
+ 
+-MISDN_SOCKET_DIR = $(localstatedir)/run/mISDNcapid
+-
+-install-exec-hook:
+-	install  -d $(DESTDIR)$(MISDN_SOCKET_DIR)
+-
+ install-data-local:
+ 	install -d $(DESTDIR)$(sysconfdir)
+ 	install -m 644 capi20.conf.sample $(DESTDIR)$(sysconfdir)/capi20.conf
+ 
+ distuninstallcheck_listfiles = \
+ 	find . -type f -print | grep -v 'capi20.conf'
++
+diff --git a/capi20/daemon.c b/capi20/daemon.c
+index 1f5b34c..b2ca095 100644
+--- a/capi20/daemon.c
++++ b/capi20/daemon.c
+@@ -81,8 +81,8 @@ static int mainpoll_size = 0;
+ static char def_config[] = DEF_CONFIG_FILE;
+ static char *config_file = NULL;
+ static int do_daemon = 1;
+-static int mIsock = 0;
+-static int mCsock = 0;
++static int mIsock = -1;
++static int mCsock = -1;
+ static int mIControl[2] = {-1, -1};
+ static struct pController *mI_Controller = NULL;
+ int mI_ControllerCount = 0;
+@@ -134,6 +134,7 @@ static void usage(void)
+ 	fprintf(stderr, "  Options are\n");
+ 	fprintf(stderr, "   -?, --help                            this help\n");
+ 	fprintf(stderr, "   -c, --config <file>                   use this config file - default %s\n", def_config);
++	fprintf(stderr, "   -d, --debug <debugmask>               enable additional debug (see m_capi.h for the bits)\n");
+ 	fprintf(stderr, "   -D, --debug-file <debug file>         use debug file (default stdout/stderr)\n");
+ 	fprintf(stderr, "   -f, --foreground                      run in forground, not as daemon\n");
+ 	fprintf(stderr, "   -k, --keeptemp                        do not delete temporary files (e.g. TIFF for fax)\n");
+@@ -576,6 +577,7 @@ static int main_control(int idx)
+ 			else
+ 				event = -errno;
+ 			eprint("Event for MasterControl read error read on parameter return %d (%d) - %s\n", ret, len, strerror(-event));
++			free(para);
+ 			return event;
+ 		}
+ 	}
+@@ -809,6 +811,28 @@ struct BInstance *ControllerSelChannel(struct pController *pc, int nr, int proto
+ 	return bi;
+ }
+ 
++int ControllerDeSelChannel(struct BInstance *bi)
++{
++	int err;
++
++	err = pthread_mutex_lock(&bi->lock);
++	if (err == 0) {
++		if (bi->usecnt) {
++			bi->usecnt--;
++			bi->proto = ISDN_P_NONE;
++		} else {
++			wprint("BI[%d] usage count is already zero\n",
++				bi->nr);
++			err = -EINVAL;
++		}
++		pthread_mutex_unlock(&bi->lock);
++	} else {
++		eprint("Lock for BI[%d] could not be acquired - %s\n",
++			bi->nr, strerror(err));
++	}
++	return err;
++}
++
+ int check_free_bchannels(struct pController *pc)
+ {
+ 	int i, cnt = 0;
+@@ -2194,6 +2218,8 @@ int main(int argc, char *argv[])
+ 	if (ret)
+ 		exit(1);
+ 
++	memset(&mcaddr, 0, sizeof(mcaddr));
++
+ 	if (DebugFileName) {
+ 		DebugFile = fopen(DebugFileName, "w");
+ 		if (!DebugFile) {
+@@ -2364,7 +2390,15 @@ retry_Csock:
+ 	}
+ 		
+ 	mcaddr.sun_family = AF_UNIX;
+-	sprintf(mcaddr.sun_path, MISDN_CAPI_SOCKET_PATH);
++	ret = mkdir(MISDN_CAPI_SOCKET_DIR, S_IRWXU | S_IRWXG);
++	if (ret < 0) {
++		if (errno != EEXIST) {
++			fprintf(stderr, "cannot create socket directory %s - %s\n", MISDN_CAPI_SOCKET_DIR, strerror(errno));
++			goto errout;
++		} else
++			iprint("directory %s already exist - reusing it\n", MISDN_CAPI_SOCKET_DIR);
++	}
++	sprintf(mcaddr.sun_path, "%s/%s", MISDN_CAPI_SOCKET_DIR, MISDN_CAPI_SOCKET_NAME);
+ 	ret = bind(mCsock, (struct sockaddr *)&mcaddr, sizeof(mcaddr));
+ 	if (ret < 0) {
+ 		fprintf(stderr, "cannot bind socket to %s - %s\n", mcaddr.sun_path, strerror(errno));
+@@ -2372,10 +2406,10 @@ retry_Csock:
+ 			ret = connect(mCsock, (struct sockaddr *)&mcaddr, sizeof(mcaddr));
+ 			if (ret < 0) {
+ 				/* seems the socket file is not in use */
+-				ret = unlink(MISDN_CAPI_SOCKET_PATH);
++				ret = unlink(mcaddr.sun_path);
+ 				if (ret < 0) {
+ 					fprintf(stderr, "cannot remove old socket file %s - %s\n",
+-						MISDN_CAPI_SOCKET_PATH, strerror(errno));
++						mcaddr.sun_path, strerror(errno));
+ 					goto errout;
+ 				}
+ 				close(mCsock);
+@@ -2387,9 +2421,9 @@ retry_Csock:
+ 
+ 		}
+ 	}
+-	ret = chmod(MISDN_CAPI_SOCKET_PATH, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
++	ret = chmod(mcaddr.sun_path, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+ 	if (ret < 0) {
+-		fprintf(stderr, "cannot change permissions on unix socket:%s - %s\n", MISDN_CAPI_SOCKET_PATH, strerror(errno));
++		fprintf(stderr, "cannot change permissions on unix socket:%s - %s\n", mcaddr.sun_path, strerror(errno));
+ 		goto errout;
+ 	}
+ 
+@@ -2457,7 +2491,8 @@ errout:
+ 	if (mICAPItimer_base->tdev > 0)
+ 		close(mICAPItimer_base->tdev);
+ 	mICAPItimer_base->tdev = -1;
+-	unlink(MISDN_CAPI_SOCKET_PATH);
++	if (mcaddr.sun_path[0])
++		unlink(mcaddr.sun_path);
+ 	if (TempDirectory && !KeepTemporaryFiles) {
+ 		ret = rmdir(TempDirectory);
+ 		if (ret)
+diff --git a/capi20/lplci.c b/capi20/lplci.c
+index 0370c41..61442d9 100644
+--- a/capi20/lplci.c
++++ b/capi20/lplci.c
+@@ -25,6 +25,9 @@
+ static int lPLCILinkUp(struct lPLCI *);
+ static int lPLCILinkDown(struct lPLCI *);
+ 
++/* Enable experimental partial early B3 support */
++/* #define HANDLE_EARLYB3 1 */
++
+ /* T301 is usually 180 - give it a chance, if not clear down 2 sec later */
+ #define ALERT_TIMEOUT	182000
+ 
+@@ -273,12 +276,34 @@ static void lPLCIInfoIndMsg(struct lPLCI *lp, uint32_t mask, unsigned char mt, s
+ 		mc_clear_cmsg(mc);
+ }
+ 
++static void lPLCIInfoIndIEProcess(struct lPLCI *lp, unsigned char ie, unsigned char *iep, struct mc_buf *mc)
++{
++#ifdef HANDLE_EARLYB3
++	if (ie == IE_PROGRESS && lp->lc->InfoMask & CAPI_INFOMASK_EARLYB3) {
++		if (iep[0] == 0x02 && (iep[1] & 0x60) == 0x00 && (iep[2] == 0x81 || iep[2] == 0x88)) {
++			/* in-band information is (maybe) available */
++			int ret;
++			ret = lPLCILinkUp(lp);
++			if (ret != 0) {
++				wprint("%s: early B3 link establish failed, ret=%d\n", CAPIobjIDstr(&lp->cobj), ret);
++			}
++		}
++	}
++#endif
++
++	mc_clear_cmsg(mc);
++	lPLCICmsgHeader(lp, &mc->cmsg, CAPI_INFO, CAPI_IND);
++	mc->cmsg.InfoNumber = ie;
++	mc->cmsg.InfoElement = iep;
++	Send2Application(lp, mc);
++}
++
+ static void lPLCIInfoIndIE(struct lPLCI *lp, unsigned char ie, uint32_t mask, struct mc_buf *mc)
+ {
+ 	unsigned char **v_ie, *iep;
+ 	int pos;
+ 
+-	if (!mc || mc->l3m)
++	if (!mc || !mc->l3m)
+ 		return;
+ 
+ 	if (!lp->lc || !(lp->lc->InfoMask & mask))	/* not requested by application */
+@@ -298,25 +323,27 @@ static void lPLCIInfoIndIE(struct lPLCI *lp, unsigned char ie, uint32_t mask, st
+ 	if ((iep == NULL) || (*iep == 0))	/* not available in message */
+ 		return;
+ 
+-	mc_clear_cmsg(mc);
+-	lPLCICmsgHeader(lp, &mc->cmsg, CAPI_INFO, CAPI_IND);
+-	mc->cmsg.InfoNumber = ie;
+-	mc->cmsg.InfoElement = iep;
+-#ifdef HANDLE_EARLYB3
+-	if (ie == IE_PROGRESS && lp->lc->InfoMask & CAPI_INFOMASK_EARLYB3) {
+-		if (iep[0] == 0x02 && iep[2] == 0x88) {	// in-band information available
+-			ret = lPLCILinkUp(lp);
+-			if (ret != 0) {
+-				....
+-			}
+-			if (!test_bit(PLCI_STATE_STACKREADY, &lp->plci->state)) {
+-				Send2ApplicationDelayed(lp, cmsg);
+-				return;
+-			}
+-		}
++	lPLCIInfoIndIEProcess(lp, ie, iep, mc);
++
++	if (ie & 0x80)	/* Single octet IEs aren't stored in an extra array */
++		return;
++
++	for (pos = 0; pos < 8; pos++) {
++		if (mc->l3m->extra[pos].codeset)
++			continue;
++
++		/* assume that extra is filled in order without holes */
++		if (!mc->l3m->extra[pos].val)
++			break;
++
++		if (mc->l3m->extra[pos].ie != ie)
++			continue;
++
++		if (!(*mc->l3m->extra[pos].val))
++			continue;
++
++		lPLCIInfoIndIEProcess(lp, ie, mc->l3m->extra[pos].val, mc);
+ 	}
+-#endif
+-	Send2Application(lp, mc);
+ }
+ 
+ uint16_t CIPMask2CIPValue(uint32_t mask)
+@@ -1983,6 +2010,12 @@ static int lPLCILinkUp(struct lPLCI *lp)
+ 	int ret = 0;
+ 	struct mPLCI *plci = p4lPLCI(lp);
+ 
++	if (lp->BIlink) {
++		dprint(MIDEBUG_PLCI, "%s: lPLCILinkUp lp->link(%p) already up, nothing to do\n", CAPIobjIDstr(&lp->cobj),
++			lp->BIlink);
++		return 0;
++	}
++
+ 	if (lp->chid.nr == MI_CHAN_NONE || lp->chid.nr == MI_CHAN_ANY) {
+ 		/* no valid channel set */
+ 		wprint("%s: no channel selected (0x%x)\n", CAPIobjIDstr(&lp->cobj), lp->chid.nr);
+@@ -2007,11 +2040,16 @@ static int lPLCILinkUp(struct lPLCI *lp)
+ 	if (!OpenBInstance(lp->BIlink, lp)) {
+ 		if (!plci->outgoing) { /* incoming call */
+ 			ret = activate_bchannel(lp->BIlink);
+-			if (ret)
++			if (ret) {
++				CloseBInstance(lp->BIlink);
++				lp->BIlink = NULL;
+ 				ret = CapiMsgOSResourceErr;
++			}
+ 		}
+ 	} else {
+ 		wprint("%s: OpenBInstance failed\n", CAPIobjIDstr(&lp->cobj));
++		ControllerDeSelChannel(lp->BIlink);
++		lp->BIlink = NULL;
+ 		ret = CapiMsgOSResourceErr;
+ 	}
+ 	return ret;
+@@ -2087,17 +2125,17 @@ void lPLCI_l3l4(struct lPLCI *lp, int pr, struct mc_buf *mc)
+ 		break;
+ 	case MT_CONNECT:
+ 		if (mc->l3m) {
++			ret = plci_parse_channel_id(lp, mc);
++			if (ret < 0) {
++				dprint(MIDEBUG_PLCI, "%s: Got no valid channel on %s (%d)\n", CAPIobjIDstr(&lp->cobj),
++					_mi_msg_type2str(pr), ret);
++			}
+ 			lPLCIInfoIndIE(lp, IE_DATE, CAPI_INFOMASK_DISPLAY, mc);
+ 			lPLCIInfoIndIE(lp, IE_DISPLAY, CAPI_INFOMASK_DISPLAY, mc);
+ 			lPLCIInfoIndIE(lp, IE_USER_USER, CAPI_INFOMASK_USERUSER, mc);
+ 			lPLCIInfoIndIE(lp, IE_PROGRESS, CAPI_INFOMASK_PROGRESS, mc);
+ 			lPLCIInfoIndIE(lp, IE_FACILITY, CAPI_INFOMASK_FACILITY, mc);
+ 			lPLCIInfoIndIE(lp, IE_CHANNEL_ID, CAPI_INFOMASK_CHANNELID, mc);
+-			ret = plci_parse_channel_id(lp, mc);
+-			if (ret < 0) {
+-				dprint(MIDEBUG_PLCI, "%s: Got no valid channel on %s (%d)\n", CAPIobjIDstr(&lp->cobj),
+-					_mi_msg_type2str(pr), ret);
+-			}
+ 		}
+ 		del_timer(&lp->atimer);
+ 		FsmEvent(&lp->plci_m, EV_L3_SETUP_CONF, mc);
+@@ -2151,19 +2189,24 @@ void lPLCI_l3l4(struct lPLCI *lp, int pr, struct mc_buf *mc)
+ 		break;
+ 	case MT_SETUP_ACKNOWLEDGE:
+ 		if (mc->l3m) {
+-			lPLCIInfoIndMsg(lp, CAPI_INFOMASK_PROGRESS, MT_SETUP_ACKNOWLEDGE, mc);
+-			lPLCIInfoIndIE(lp, IE_DISPLAY, CAPI_INFOMASK_DISPLAY, mc);
+-			lPLCIInfoIndIE(lp, IE_PROGRESS, CAPI_INFOMASK_PROGRESS | CAPI_INFOMASK_EARLYB3, mc);
+-			lPLCIInfoIndIE(lp, IE_CHANNEL_ID, CAPI_INFOMASK_CHANNELID, mc);
+ 			ret = plci_parse_channel_id(lp, mc);
+ 			if (ret < -1) {
+ 				wprint("%s: Got channel coding error in %s (%d)\n", CAPIobjIDstr(&lp->cobj),
+ 					_mi_msg_type2str(pr), ret);
+ 			}
++			lPLCIInfoIndMsg(lp, CAPI_INFOMASK_PROGRESS, MT_SETUP_ACKNOWLEDGE, mc);
++			lPLCIInfoIndIE(lp, IE_DISPLAY, CAPI_INFOMASK_DISPLAY, mc);
++			lPLCIInfoIndIE(lp, IE_PROGRESS, CAPI_INFOMASK_PROGRESS | CAPI_INFOMASK_EARLYB3, mc);
++			lPLCIInfoIndIE(lp, IE_CHANNEL_ID, CAPI_INFOMASK_CHANNELID, mc);
+ 		}
+ 		break;
+ 	case MT_CALL_PROCEEDING:
+ 		if (mc->l3m) {
++			ret = plci_parse_channel_id(lp, mc);
++			if (ret < -1) {
++				wprint("%s: Got channel coding error in %s (%d)\n", CAPIobjIDstr(&lp->cobj),
++					_mi_msg_type2str(pr), ret);
++			}
+ 			lPLCIInfoIndMsg(lp, CAPI_INFOMASK_PROGRESS, MT_CALL_PROCEEDING, mc);
+ 			lPLCIInfoIndIE(lp, IE_DISPLAY, CAPI_INFOMASK_DISPLAY, mc);
+ 			lPLCIInfoIndIE(lp, IE_PROGRESS, CAPI_INFOMASK_PROGRESS | CAPI_INFOMASK_EARLYB3, mc);
+@@ -2172,17 +2215,17 @@ void lPLCI_l3l4(struct lPLCI *lp, int pr, struct mc_buf *mc)
+ 		break;
+ 	case MT_ALERTING:
+ 		if (mc->l3m) {
++			ret = plci_parse_channel_id(lp, mc);
++			if (ret < -1) {
++				wprint("%s: Got channel coding error in %s (%d)\n", CAPIobjIDstr(&lp->cobj),
++					_mi_msg_type2str(pr), ret);
++			}
+ 			lPLCIInfoIndMsg(lp, CAPI_INFOMASK_PROGRESS, MT_ALERTING, mc);
+ 			lPLCIInfoIndIE(lp, IE_DISPLAY, CAPI_INFOMASK_DISPLAY, mc);
+ 			lPLCIInfoIndIE(lp, IE_USER_USER, CAPI_INFOMASK_USERUSER, mc);
+ 			lPLCIInfoIndIE(lp, IE_PROGRESS, CAPI_INFOMASK_PROGRESS | CAPI_INFOMASK_EARLYB3, mc);
+ 			lPLCIInfoIndIE(lp, IE_FACILITY, CAPI_INFOMASK_FACILITY, mc);
+ 			lPLCIInfoIndIE(lp, IE_CHANNEL_ID, CAPI_INFOMASK_CHANNELID, mc);
+-			ret = plci_parse_channel_id(lp, mc);
+-			if (ret < -1) {
+-				wprint("%s: Got channel coding error in %s (%d)\n", CAPIobjIDstr(&lp->cobj),
+-					_mi_msg_type2str(pr), ret);
+-			}
+ 			add_timer(&lp->atimer, ALERT_TIMEOUT);
+ 		}
+ 		break;
+diff --git a/capi20/m_capi.h b/capi20/m_capi.h
+index 147c4ef..f0eb106 100644
+--- a/capi20/m_capi.h
++++ b/capi20/m_capi.h
+@@ -250,6 +250,7 @@ struct pController {
+ struct pController *get_mController(int);
+ struct pController *get_cController(int);
+ struct BInstance *ControllerSelChannel(struct pController *, int, int);
++int ControllerDeSelChannel(struct BInstance *);
+ uint32_t NextFreePLCI(struct mCAPIobj *);
+ int OpenLayer3(struct pController *);
+ int check_free_bchannels(struct pController *);
+diff --git a/capi20/m_capi_sock.h b/capi20/m_capi_sock.h.in
+similarity index 85%
+rename from capi20/m_capi_sock.h
+rename to capi20/m_capi_sock.h.in
+index 9c19485..b2c2586 100644
+--- a/capi20/m_capi_sock.h
++++ b/capi20/m_capi_sock.h.in
+@@ -3,7 +3,7 @@
+  *
+  * Author       Karsten Keil <kkeil@linux-pingi.de>
+  *
+- * Copyright 2011  by Karsten Keil <kkeil@linux-pingi.de>
++ * Copyright 2011,2016  by Karsten Keil <kkeil@linux-pingi.de>
+  *
+  * This code is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU LESSER GENERAL PUBLIC LICENSE
+@@ -25,7 +25,8 @@
+ extern "C" {
+ #endif
+ 
+-#define MISDN_CAPI_SOCKET_PATH	"/var/run/mISDNcapid/sock"
++#define MISDN_CAPI_SOCKET_NAME          "@MISDN_CAPI_SOCKET_NAME@"
++#define MISDN_CAPI_SOCKET_DIR           "@MISDN_CAPI_SOCKET_DIR@"
+ 
+ #define MIC_INFO_CODING_ERROR	1
+ 
+diff --git a/capi20/module/capi_mod_misdn.c b/capi20/module/capi_mod_misdn.c
+index 70056cb..3c296ef 100644
+--- a/capi20/module/capi_mod_misdn.c
++++ b/capi20/module/capi_mod_misdn.c
+@@ -65,7 +65,7 @@ static int misdnOpenSocket(void)
+ 		return -1;
+ 	}
+ 	mcaddr.sun_family = AF_UNIX;
+-	sprintf(mcaddr.sun_path, MISDN_CAPI_SOCKET_PATH);
++	sprintf(mcaddr.sun_path, "%s/%s", MISDN_CAPI_SOCKET_DIR, MISDN_CAPI_SOCKET_NAME);
+ 
+ 	/* Connect socket to address */
+ 	if (!connect(nHandle, (struct sockaddr *)&mcaddr, sizeof(mcaddr))) {
+diff --git a/capi20/ncci.c b/capi20/ncci.c
+index 6629205..1307d20 100644
+--- a/capi20/ncci.c
++++ b/capi20/ncci.c
+@@ -151,7 +151,7 @@ static void ncci_connect_b3_resp(struct FsmInst *fi, int event, void *arg)
+ 	struct mNCCI *ncci = fi->userdata;
+ 	struct mc_buf *mc = arg;
+ 
+-	if (mc->cmsg.Info == 0) {
++	if (mc->cmsg.Reject == 0) {
+ 		FsmChangeState(fi, ST_NCCI_N_2);
+ 		ncciCmsgHeader(ncci, mc, CAPI_CONNECT_B3_ACTIVE, CAPI_IND);
+ 		if (ncci->ncpi)
+@@ -557,6 +557,7 @@ static struct FsmNode fn_ncci_list[] = {
+ #endif
+ 	{ST_NCCI_N_4, EV_NC_DISCONNECT_B3_CONF, ncci_disconnect_b3_conf},
+ 	{ST_NCCI_N_4, EV_NC_DISCONNECT_B3_IND, ncci_disconnect_b3_ind},
++	{ST_NCCI_N_4, EV_DL_RELEASE_IND, ncci_dl_release_ind_conf},
+ 	{ST_NCCI_N_4, EV_DL_RELEASE_CONF, ncci_dl_release_ind_conf},
+ 	{ST_NCCI_N_4, EV_DL_DOWN_IND, ncci_dl_down_ind},
+ 	{ST_NCCI_N_4, EV_AP_MANUFACTURER_REQ, ncci_manufacturer_req},
+diff --git a/configure.ac b/configure.ac
+index ff215e0..4c893f7 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -143,6 +143,8 @@ then
+ 			AC_MSG_ERROR([spandsp header file not found - install spandsp development files])
+ 		)
+ 	fi
++	AC_SUBST( [MISDN_CAPI_SOCKET_NAME], "sock" )
++	AC_SUBST( [MISDN_CAPI_SOCKET_DIR], "$(localstatedir)/run/mISDNcapid" )
+ fi
+ 
+ # Checks for library functions.
+@@ -181,6 +183,7 @@ AC_CONFIG_FILES([Makefile
+                  guitools/Makefile
+                  guitools/qmisdnwatch/Makefile
+                  capi20/Makefile
++                 capi20/m_capi_sock.h
+                  capi20/module/Makefile
+                ])
+ 
+diff --git a/example/testlayer1.c b/example/testlayer1.c
+index a8bd73c..bac8a8a 100644
+--- a/example/testlayer1.c
++++ b/example/testlayer1.c
+@@ -87,7 +87,7 @@ void usage(void) {
+ 	printf("\nvalid options are:\n");
+ 	printf("\n");
+ 	printf("  --card=<n>         use card number n (default 0)\n");
+-	printf("  --d                enable D channel stream with <n> packet sz\n");
++	printf("  --d,  --d=<n>      enable D channel stream with <n> packet sz\n");
+ 	printf("  --b1, --b1=<n>     enable B channel stream with <n> packet sz\n");
+ 	printf("  --b2, --b2=<n>     enable B channel stream with <n> packet sz\n");
+ 	printf("  --te               use TA in TE mode (default is NT)\n");
+@@ -115,6 +115,9 @@ void usage(void) {
+ #define CHAN_D  	2
+ #define MAX_CHAN	3
+ 
++#define CHAN_ACTIVATE   1
++#define CHAN_DEACTIVATE 0
++
+ #define TX_BURST_HEADER_SZ 5
+ 
+ 
+@@ -153,20 +156,22 @@ typedef struct {
+ 	int tx_ack;
+ 	int transp_rx;
+ 	int activated;
+-	unsigned long long t_start; // time of day first TX
++	unsigned long long t_start; // timestamp of first channel activate CNF
+ 	data_stats_t rx, tx; // contains data statistics
+ 	unsigned long seq_num;
+ 	unsigned char idle_cnt; // cnt seconds if channel is acivated by idle
+ 	unsigned char res_cnt; // cnt channel ressurections
+ 	unsigned char hdlc;
++	unsigned char toggle;    // ACTIVATE/DEACTIVATE channel during testloop
++	unsigned int toggle_cnt; // toggle count
+ } channel_data_t;
+ 
+ typedef struct _devinfo {
+ 	int device;
+ 	int cardnr;
+-	int layerid[4]; // layer1 ID
++
++	int layerid[4]; // layer1 ID (sockets)
+ 	struct sockaddr_mISDN laddr[4];
+-	int nds;
+ 
+ 	channel_data_t ch[4]; // data channel info for D,B2,B2,(E)
+ 	unsigned char channel_mask; // enable channel streams
+@@ -179,6 +184,7 @@ static int debug = 0;
+ static int usleep_val = 200;
+ static int te_mode = 0;
+ static int stop = 0; // stop after x seconds
++static int exit_app = 0; // stop after x seconds
+ static unsigned char payload = 1;
+ static int btrans = 0;
+ static int testloop = 0;
+@@ -188,19 +194,19 @@ static devinfo_t mISDN;
+ static unsigned char trans_tx_val[MAX_CHAN] = {0, 0, 0};
+ static unsigned char trans_rx_val[MAX_CHAN] = {0, 0, 0};
+ 
+-void sig_handler(int sig) {
+-	int i;
+ 
+-	fprintf(stdout, "exiting...\n");
+-	fflush(stdout);
+-	fflush(stderr);
+-	for (i = 0; i < MAX_CHAN; i++) {
+-		if (mISDN.layerid[i] > 0) {
+-			fprintf(stdout, "closing socket '%s'\n", CHAN_NAMES[i]);
+-			close(mISDN.layerid[i]);
+-		}
++// function header
++int control_channel(devinfo_t *di, unsigned char chan_id, unsigned char activate);
++
++
++void sig_handler(int sig) {
++	switch (sig) {
++		case 2:
++			exit_app = 1; // request graceful stop of mainloop
++			return;
++		default:
++			exit(0);
+ 	}
+-	exit(0);
+ }
+ 
+ void set_signals() {
+@@ -244,10 +250,6 @@ int setup_bchannel(devinfo_t *di, unsigned char bch) {
+ 		return 2;
+ 	}
+ 
+-	if (di->layerid[bch] > di->nds - 1) {
+-		di->nds = di->layerid[bch] + 1;
+-	}
+-
+ 	ret = fcntl(di->layerid[bch], F_SETFL, O_NONBLOCK);
+ 	if (ret < 0) {
+ 		fprintf(stdout, "fcntl error %s\n", strerror(errno));
+@@ -268,140 +270,129 @@ int setup_bchannel(devinfo_t *di, unsigned char bch) {
+ 	return ret;
+ }
+ 
+-int activate_bchan(devinfo_t *di, unsigned char bch) {
+-	unsigned char buf[2048];
+-	struct mISDNhead *hh = (struct mISDNhead *) buf;
++/*
++ * activate / deactivate B-Channel
++ */
++int control_channel(devinfo_t *di, unsigned char chan_id, unsigned char activate)
++{
++	unsigned char buffer[2048];
++	struct mISDNhead *hh = (struct mISDNhead *) buffer;
+ 	struct timeval tout;
+ 	fd_set rds;
+ 	int ret;
++	socklen_t alen;
++	unsigned char done = 0;
+ 
+-	hh->prim = PH_ACTIVATE_REQ;
++	hh->prim = activate ? PH_ACTIVATE_REQ : PH_DEACTIVATE_REQ;
+ 	hh->id = MISDN_ID_ANY;
+-	ret = sendto(di->layerid[bch], buf, MISDN_HEADER_LEN, 0, NULL, 0);
++	ret = sendto(di->layerid[chan_id], buffer, MISDN_HEADER_LEN, 0, NULL, 0);
+ 
+ 	if (ret < 0) {
+-		fprintf(stdout, "could not send ACTIVATE_REQ %s\n", strerror(errno));
+-		return 0;
+-	}
+-
+-	fprintf(stdout, "--> B%i -  PH_ACTIVATE_REQ\n", bch + 1);
+-
+-	tout.tv_usec = 0;
+-	tout.tv_sec = 10;
+-	FD_ZERO(&rds);
+-	FD_SET(di->layerid[bch], &rds);
+-
+-	ret = select(di->nds, &rds, NULL, NULL, &tout);
+-	if (debug > 3) {
+-		fprintf(stdout, "select ret=%d\n", ret);
+-	}
+-	if (ret < 0) {
+-		fprintf(stdout, "select error  %s\n", strerror(errno));
+-		return 0;
+-	}
+-	if (ret == 0) {
+-		fprintf(stdout, "select timeeout\n");
++		fprintf(stdout, "could not send %s %s\n",
++			(activate ? "PH_ACTIVATE_REQ" : "PH_DEACTIVATE_REQ"),
++			strerror(errno));
+ 		return 0;
+ 	}
+ 
+-	if (FD_ISSET(di->layerid[bch], &rds)) {
+-		ret = recv(di->layerid[bch], buf, 2048, 0);
+-		if (ret < 0) {
+-			fprintf(stdout, "recv error  %s\n", strerror(errno));
+-			return 0;
+-		}
+-		if (hh->prim == PH_ACTIVATE_IND) {
+-			fprintf(stdout, "<-- B%i -  PH_ACTIVATE_IND\n", bch + 1);
+-			di->ch[bch].activated = 1;
+-		} else {
+-			if (debug)
+-				fprintf(stdout, "<-- B%i -  unhandled prim 0x%x\n",
+-				bch + 1, hh->prim);
+-			return 0;
+-		}
+-	} else {
+-		fprintf(stdout, "bchan fd not in set\n");
+-		return 0;
++	if (!di->ch[chan_id].toggle_cnt || exit_app) {
++		fprintf(stdout, "--> %s - %s\n", CHAN_NAMES[chan_id], (activate ? "PH_ACTIVATE_REQ" : "PH_DEACTIVATE_REQ"));
+ 	}
+-	return ret;
+-}
+ 
+-/*
+- * send PH_ACTIVATE_REQ and wait for PH_ACTIVATE_IND
+- * returns 0 if PH_ACTIVATE_IND received within timeout interval
+- */
+-int do_setup(devinfo_t *di) {
+-	int ret = 0;
+-	struct timeval tout;
+-	struct mISDNhead *hh;
+-	unsigned char buffer[2048];
+-	fd_set rds;
+-	socklen_t alen;
++	int max_retry = 128;
+ 
+-	hh = (struct mISDNhead *) buffer;
+-	hh->prim = PH_ACTIVATE_REQ;
+-	hh->id = MISDN_ID_ANY;
+-	fprintf(stdout, "--> D  -  PH_ACTIVATE_REQ\n");
+-	ret = sendto(di->layerid[CHAN_D], buffer, MISDN_HEADER_LEN, 0, NULL, 0);
+-
+-	while (1) {
+-		tout.tv_usec = 0;
+-		tout.tv_sec = 1;
++	do {
++		tout.tv_usec = 1000 * 100;
++		tout.tv_sec = 0;
+ 		FD_ZERO(&rds);
+-		FD_SET(di->layerid[CHAN_D], &rds);
++		FD_SET(di->layerid[chan_id], &rds);
+ 
+-		ret = select(di->nds, &rds, NULL, NULL, &tout);
++		ret = select(di->layerid[chan_id]+1, &rds, NULL, NULL, &tout);
+ 		if (debug > 3) {
+ 			fprintf(stdout, "select ret=%d\n", ret);
+ 		}
+ 		if (ret < 0) {
+-			fprintf(stdout, "select error %s\n", strerror(errno));
+-			return 9;
++			fprintf(stdout, "select error  %s\n", strerror(errno));
++			return 0;
+ 		}
+ 		if (ret == 0) {
+ 			fprintf(stdout, "select timeeout\n");
+-			return 10;
++			return 0;
+ 		}
+ 
+-		if (FD_ISSET(di->layerid[CHAN_D], &rds)) {
+-			alen = sizeof (di->laddr[CHAN_D]);
+-			ret = recvfrom(di->layerid[CHAN_D], buffer, 300, 0,
+-				(struct sockaddr *) &di->laddr[CHAN_D], &alen);
++		if (FD_ISSET(di->layerid[chan_id], &rds)) {
++			alen = sizeof (di->laddr[chan_id]);
++			ret = recvfrom(di->layerid[chan_id], buffer, 2048, 0,
++				(struct sockaddr *) &di->laddr[chan_id], &alen);
+ 			if (ret < 0) {
+ 				fprintf(stdout, "recvfrom error %s\n",
+ 					strerror(errno));
+-				return 11;
++				return 0;
+ 			}
+ 			if (debug > 3) {
+ 				fprintf(stdout, "alen =%d, dev(%d) channel(%d)\n",
+-					alen, di->laddr[CHAN_D].dev, di->laddr[CHAN_D].channel);
++					alen, di->laddr[chan_id].dev, di->laddr[chan_id].channel);
+ 			}
+-			if ((hh->prim == PH_ACTIVATE_IND) || (hh->prim == PH_ACTIVATE_CNF)) {
+-				if (hh->prim == PH_ACTIVATE_IND) {
+-					fprintf(stdout, "<-- D  -  PH_ACTIVATE_IND\n");
+-				} else {
+-					fprintf(stdout, "<-- D  -  PH_ACTIVATE_CNF\n");
++			if (activate && ((hh->prim == PH_ACTIVATE_IND) || (hh->prim == PH_ACTIVATE_CNF))) {
++				if (!di->ch[chan_id].toggle_cnt || exit_app) {
++					fprintf(stdout,
++						"<-- %s - PH_ACTIVATE_%s\n",
++						CHAN_NAMES[chan_id],
++						(hh->prim == PH_ACTIVATE_IND) ? "IND" : "CNF");
+ 				}
+-				di->ch[CHAN_D].activated = 1;
+-
+-				if ((di->ch[CHAN_B1].tx_ack) && (!setup_bchannel(di, CHAN_B1))) {
+-					activate_bchan(di, CHAN_B1);
++				di->ch[chan_id].toggle_cnt++;
++				di->ch[chan_id].activated = 1;
++				done = 1;
++			} else
++			if (!activate && ((hh->prim == PH_DEACTIVATE_IND) || (hh->prim == PH_DEACTIVATE_CNF))) {
++				if (!di->ch[chan_id].toggle_cnt || exit_app) {
++					fprintf(stdout,
++						"<-- %s - PH_DEACTIVATE_%s\n",
++						CHAN_NAMES[chan_id],
++						(hh->prim == PH_DEACTIVATE_IND) ? "IND" : "CNF");
+ 				}
++				di->ch[chan_id].toggle_cnt++;
++				di->ch[chan_id].activated = 0;
++				done = 1;
++			} else {
++				if (debug)
++					fprintf(stdout, "<-- %s -  unhandled prim 0x%x\n",
++					CHAN_NAMES[chan_id], hh->prim);
++			}
++		} else {
++			fprintf(stdout, "chan fd not in set\n");
++			return 0;
++		}
++	} while (!done && (max_retry-- > 0));
+ 
+-				if ((di->ch[CHAN_B2].tx_ack) && (!setup_bchannel(di, CHAN_B2))) {
+-					activate_bchan(di, CHAN_B2);
+-				}
++	return (done==1);
++}
++
++/*
++ * send PH_ACTIVATE_REQ and wait for PH_ACTIVATE_IND
++ * returns 0 if PH_ACTIVATE_IND received within timeout interval
++ */
++int do_setup(devinfo_t *di) {
++	if (!control_channel(di, CHAN_D, CHAN_ACTIVATE)) {
++		fprintf(stdout, "error activateing D Channel\n");
++		return 0;
++	}
+ 
++	if (di->ch[CHAN_D].activated) {
++		if ((di->ch[CHAN_B1].tx_ack) && (!setup_bchannel(di, CHAN_B1))) {
++			if (!control_channel(di, CHAN_B1, CHAN_ACTIVATE)) {
++				fprintf(stdout, "error activateing B1 Channel\n");
++				return 0;
++			}
++		}
++		if ((di->ch[CHAN_B2].tx_ack) && (!setup_bchannel(di, CHAN_B2))) {
++			if (!control_channel(di, CHAN_B2, CHAN_ACTIVATE)) {
++				fprintf(stdout, "error activateing B2 Channel\n");
+ 				return 0;
+-			} else {
+-				if (debug) {
+-					fprintf(stdout, "<-- D  -  unhandled prim 0x%x\n", hh->prim);
+-				}
+ 			}
+ 		}
+ 	}
+ 
+-	return 666;
++	return (di->ch[CHAN_D].activated ? 0 : 1);
+ }
+ 
+ int check_rx_data_hdlc(devinfo_t *di, int ch_idx, int ret, unsigned char *rx_buf) {
+@@ -560,25 +551,26 @@ int main_data_loop(devinfo_t *di) {
+ 	unsigned long rx_delta;
+ 	unsigned int running_since = 0;
+ 
++	printf("\nwaiting for data (use CTRL-C to cancel) stop(%i) sleep(%i)...\n", stop, usleep_val);
++
+ 	t1 = get_tick_count();
+ 
+-	tout.tv_usec = 0;
+-	tout.tv_sec = 1;
++	tout.tv_usec = 4000;
++	tout.tv_sec = 0;
+ 
+-	printf("\nwaiting for data (use CTRL-C to cancel) stop(%i) sleep(%i)...\n", stop, usleep_val);
+ 	while (1) {
+ 		for (ch_idx = 0; ch_idx < MAX_CHAN; ch_idx++) {
+-			if (!di->ch[ch_idx].activated)
++			if (!di->ch[ch_idx].activated) {
++				if (di->ch[ch_idx].toggle) {
++					if (control_channel(di, ch_idx, CHAN_ACTIVATE)) {
++						di->ch[ch_idx].tx_ack = 1;
++					}
++				}
+ 				continue;
++			}
+ 
+ 			/* write data */
+ 			if (di->ch[ch_idx].tx_ack) {
+-				// start timer tick at first TX packet
+-				if (!di->ch[ch_idx].t_start) {
+-					di->ch[ch_idx].t_start = get_tick_count();
+-					di->ch[ch_idx].seq_num = di->ch[ch_idx].tx.pkt_cnt;
+-				}
+-
+ 				l = build_tx_data(di, ch_idx, tx_buf + MISDN_HEADER_LEN);
+ 				if (debug > 4) {
+ 					printf("%s-TX size(%d) : ", CHAN_NAMES[ch_idx], l);
+@@ -592,13 +584,16 @@ int main_data_loop(devinfo_t *di) {
+ 					sizeof (di->laddr[ch_idx]));
+ 
+ 				di->ch[ch_idx].tx_ack--;
++				if (!di->ch[ch_idx].t_start) {
++					di->ch[ch_idx].t_start = get_tick_count();
++				}
+ 			}
+ 
+ 			/* read data */
+ 			FD_ZERO(&rds);
+ 			FD_SET(di->layerid[ch_idx], &rds);
+ 
+-			ret = select(di->nds, &rds, NULL, NULL, &tout);
++			ret = select(di->layerid[ch_idx] + 1, &rds, NULL, NULL, &tout);
+ 			if (ret < 0) {
+ 				fprintf(stdout, "select error %s\n", strerror(errno));
+ 			}
+@@ -646,8 +641,19 @@ int main_data_loop(devinfo_t *di) {
+ 					if (rx_error) {
+ 						di->ch[ch_idx].rx.err_pkt++;
+ 					}
++
++					if (di->ch[ch_idx].toggle) {
++						control_channel(di, ch_idx, CHAN_DEACTIVATE);
++					}
+ 				} else if (hhrx->prim == PH_DATA_CNF) {
+-					di->ch[ch_idx].tx_ack++;
++					if (debug > 2) {
++						fprintf(stdout, "<-- %s - PH_DATA_CNF (toggle:%i)\n",
++							CHAN_NAMES[ch_idx], di->ch[ch_idx].toggle);
++					}
++					if (!di->ch[ch_idx].toggle) {
++						// ready to send next TX package in next mainloop
++						di->ch[ch_idx].tx_ack++;
++					}
+ 				} else {
+ 					if (debug > 2) {
+ 						fprintf(stdout, "<-- %s - unhandled prim 0x%x\n",
+@@ -657,12 +663,9 @@ int main_data_loop(devinfo_t *di) {
+ 			}
+ 		}
+ 
+-		/* relax cpu usage */
+-		usleep(usleep_val);
+-
+ 		// print out data rate stats:
+ 		t2 = get_tick_count();
+-		if ((t2 - t1) > (TICKS_PER_SEC / 1)) {
++		if ((t2 - t1) > (TICKS_PER_SEC / 1) || exit_app) {
+ 			t1 = t2;
+ 			running_since++;
+ 
+@@ -670,16 +673,17 @@ int main_data_loop(devinfo_t *di) {
+ 				rx_delta = (di->ch[ch_idx].rx.total - di->ch[ch_idx].rx.delta);
+ 				printf("%s rate/s: %lu, rate-avg: %4.3f,"
+ 					" rx total: %lu kb since %llu secs,"
+-					" pkt(rx/tx): %lu/%lu, rx-err:%lu,%i\n",
++					" pkt(tx/rx): %lu/%lu, rx-err:%lu,%i DEACT/ACT(%d)\n",
+ 					CHAN_NAMES[ch_idx], rx_delta,
+ 					(double) ((double) ((unsigned long long) di->ch[ch_idx].rx.total * TICKS_PER_SEC)
+ 					/ (double) (t2 - di->ch[ch_idx].t_start)),
+ 					(di->ch[ch_idx].rx.total),
+ 					di->ch[ch_idx].t_start ? ((t2 - di->ch[ch_idx].t_start) / TICKS_PER_SEC) : 0,
+-					di->ch[ch_idx].rx.pkt_cnt,
+ 					di->ch[ch_idx].tx.pkt_cnt,
++					di->ch[ch_idx].rx.pkt_cnt,
+ 					di->ch[ch_idx].rx.err_pkt,
+-					di->ch[ch_idx].res_cnt);
++					di->ch[ch_idx].res_cnt,
++					di->ch[ch_idx].toggle_cnt);
+ 
+ 				/*
+ 				 * care for idle but 'active' channels, what happens
+@@ -687,7 +691,7 @@ int main_data_loop(devinfo_t *di) {
+ 				 */
+ 				if ((di->ch[ch_idx].activated) && (!rx_delta)) {
+ 					di->ch[ch_idx].idle_cnt++;
+-					if (di->ch[ch_idx].idle_cnt > 2) {
++					if ((di->ch[ch_idx].idle_cnt > 2) && !di->ch[ch_idx].toggle) {
+ 						// resurrect data pipe
+ 						di->ch[ch_idx].seq_num++;
+ 						di->ch[ch_idx].res_cnt++;
+@@ -702,10 +706,24 @@ int main_data_loop(devinfo_t *di) {
+ 			}
+ 			printf("\n");
+ 
+-			if ((stop) && (running_since >= stop)) {
++			// closing all channels before exit
++			if (exit_app || (stop && (running_since >= stop))) {
++				for (ch_idx = 0; ch_idx < MAX_CHAN; ch_idx++) {
++					if (di->ch[ch_idx].activated) {
++						di->ch[ch_idx].activated = 0;
++						control_channel(di, ch_idx, CHAN_DEACTIVATE);
++					}
++
++					if (mISDN.layerid[ch_idx] > 0) {
++						fprintf(stdout, "closing socket '%s'\n", CHAN_NAMES[ch_idx]);
++						close(mISDN.layerid[ch_idx]);
++					}
++				}
+ 				return 0;
+ 			}
+ 		}
++
++		usleep(usleep_val);
+ 	}
+ }
+ 
+@@ -764,7 +782,6 @@ connect_layer1_d(devinfo_t *di) {
+ 		return 5;
+ 	}
+ 
+-	di->nds = di->layerid[CHAN_D] + 1;
+ 	ret = fcntl(di->layerid[CHAN_D], F_SETFL, O_NONBLOCK);
+ 	if (ret < 0) {
+ 		fprintf(stdout, "fcntl error %s\n", strerror(errno));
+@@ -774,7 +791,9 @@ connect_layer1_d(devinfo_t *di) {
+ 	di->laddr[CHAN_D].family = AF_ISDN;
+ 	di->laddr[CHAN_D].dev = di->cardnr;
+ 	di->laddr[CHAN_D].channel = 0;
++
+ 	ret = bind(di->layerid[CHAN_D], (struct sockaddr *) &di->laddr[CHAN_D], sizeof (di->laddr[CHAN_D]));
++	sleep(1);
+ 
+ 	if (ret < 0) {
+ 		fprintf(stdout, "could not bind l1 socket %s\n", strerror(errno));
+@@ -892,6 +911,11 @@ int main(int argc, char *argv[]) {
+ 	// init Data burst values
+ 	for (ch_idx = 0; ch_idx < MAX_CHAN; ch_idx++) {
+ 		if (mISDN.channel_mask & (1 << ch_idx)) {
++			if (mISDN.ch[ch_idx].tx_size < 0) {
++				mISDN.ch[ch_idx].toggle = 1;
++				mISDN.ch[ch_idx].tx_size *= -1;
++			}
++
+ 			if (!mISDN.ch[ch_idx].tx_size) {
+ 				mISDN.ch[ch_idx].tx_size = CHAN_DFLT_PKT_SZ[ch_idx];
+ 			}
+@@ -902,20 +926,13 @@ int main(int argc, char *argv[]) {
+ 
+ 			mISDN.ch[ch_idx].hdlc = (!(((ch_idx == CHAN_B1) || (ch_idx == CHAN_B2)) && btrans));
+ 			mISDN.ch[ch_idx].tx_ack = 1;
++			mISDN.ch[ch_idx].seq_num = 0;
+ 
+ 			fprintf(stdout, "chan %s stream enabled with packet sz %d bytes\n",
+ 				CHAN_NAMES[ch_idx], di->ch[ch_idx].tx_size);
+ 		}
+ 	}
+ 
+-	err = socket(PF_ISDN, SOCK_RAW, ISDN_P_BASE);
+-	if (err < 0) {
+-		fprintf(stderr, "cannot open mISDN due to %s\n",
+-			strerror(errno));
+-		return 1;
+-	}
+-	close(err);
+-
+ 	err = connect_layer1_d(&mISDN);
+ 	if (err) {
+ 		fprintf(stdout, "error(%d) connecting layer1\n", err);
+@@ -929,8 +946,8 @@ int main(int argc, char *argv[]) {
+ 		set_signals();
+ 		err = do_setup(&mISDN);
+ 		if (err) {
+-			fprintf(stdout, "do_setup error %d\n", err);
+-			return (0);
++			fprintf(stdout, "do_setup error %d\n", err); return
++			(0);
+ 		}
+ 		if (mISDN.channel_mask) {
+ 			main_data_loop(&mISDN);
+diff --git a/example/testlayer3.c b/example/testlayer3.c
+index 399fd45..cdb4747 100644
+--- a/example/testlayer3.c
++++ b/example/testlayer3.c
+@@ -1203,6 +1203,7 @@ static int do_control_worker(devinfo_t *di)
+ 				break;
+ #endif
+ 			}
++			break;
+ 		case MT_CONNECT_ACKNOWLEDGE:
+ 			mylog(3, "got %s\n", mi_msg_type2str(cmd));
+ 			/* We got connect ack, so bring B-channel up */
+@@ -1295,6 +1296,8 @@ static int bch_worker(devinfo_t *di)
+ 			ret = write(di->save, buf + MISDN_HEADER_LEN, len - MISDN_HEADER_LEN);
+ 			if (ret < 0)
+ 				fprintf(stderr,"got error on write %s\n", strerror(errno));
++			else
++				ret = 0;
+ 			break;
+ 		case PH_DATA_CNF:
+ 			/* get ACK of send data, so we can
+diff --git a/tools/E1test.c b/tools/E1test.c
+index fe7be2c..101c12f 100644
+--- a/tools/E1test.c
++++ b/tools/E1test.c
+@@ -1,5 +1,6 @@
+ /*
+  *
++ * Copyright 2015 Karsten Keil <keil@b1-systems.de>
+  * Copyright 2011 Karsten Keil <kkeil@linux-pingi.de>
+  *
+  * This program is free software; you can redistribute it and/or modify it
+@@ -42,7 +43,6 @@
+ #include <mISDN/mISDNif.h>
+ #include <mISDN/af_isdn.h>
+ 
+-
+ /* We do not have the all the ioctl controls mainstream yet so define it here.
+  * It should still work then with the old standalone driver
+  */
+@@ -55,7 +55,6 @@
+ #define MISDN_CTRL_L1_GET_SYNC_INFO	0x00010004
+ #endif
+ 
+-
+ #define	FRAME_SIZE	32
+ #define	SMFR_SIZE	(8 * FRAME_SIZE)
+ #define MFR_SIZE	(2 * SMFR_SIZE)
+@@ -63,7 +62,6 @@
+ #define DATA_SIZE_1MS	(8 * 32)
+ #define DATA_SIZE_1S	(8000 * 32)
+ 
+-
+ #define MFR_SYNC_VALUE	0x2c
+ #define MFR_SYNC_MASK	0xfc
+ #define MFR_SYNC_BIT	0x01
+@@ -103,18 +101,18 @@ enum FrameTypes {
+ 
+ struct fr_cdesc {
+ 	enum FrameTypes type;
+-	uint8_t		prop;
+-	uint8_t		subcnt;
+-	uint16_t	count;
++	uint8_t prop;
++	uint8_t subcnt;
++	uint16_t count;
+ };
+ 
+ struct fr_flatdesc {
+ 	enum FrameTypes type;	/* only basic frame types */
+-	uint8_t		prop;
++	uint8_t prop;
+ 	enum FrameTypes otype;	/* original type from generation */
+-	uint8_t		mf_pos;	/* 0 - 15 */
+-	uint32_t	pos;
+-	uint8_t		*data;
++	uint8_t mf_pos;		/* 0 - 15 */
++	uint32_t pos;
++	uint8_t *data;
+ };
+ 
+ #define ftPROP_NONE	0x00
+@@ -126,10 +124,10 @@ struct fr_flatdesc {
+ #define ftPROP_AIS	0x80	/* AIS */
+ 
+ struct fr_data {
+-	int			count;
+-	struct fr_flatdesc	*desc;
+-	size_t			data_size;
+-	uint8_t			*data;
++	int count;
++	struct fr_flatdesc *desc;
++	size_t data_size;
++	uint8_t *data;
+ };
+ 
+ static struct fr_data *TestData;
+@@ -234,7 +232,7 @@ struct fr_cdesc test2[] = {
+ 	{ftBIT2, ftPROP_FAIL, 1, 1},
+ 	{ftFAS, ftPROP_NONE, 1, 1},
+ 	{ftCtrl_End, ftPROP_NONE, 0, 0},
+-	
++
+ 	{ftCtrl_Repeat, ftPROP_NONE, 0, 20},
+ 	{ftBIT2, ftPROP_NONE, 1, 1},
+ 	{ftFAS, ftPROP_NONE, 1, 1},
+@@ -271,8 +269,8 @@ struct fr_cdesc test2[] = {
+ 	{ftBIT2, ftPROP_NONE, 1, 1},
+ 	{ftFAS, ftPROP_NONE, 1, 1},
+ 	{ftCtrl_End, ftPROP_NONE, 0, 0},
+-	
+-	{ftBIT2,ftPROP_NONE, 1, 1},
++
++	{ftBIT2, ftPROP_NONE, 1, 1},
+ 	{ftFRAME_B, ftPROP_TS31, 2, 16000},
+ 	{ftFRAME_C, ftPROP_TS31, 2, 6},
+ 	{ftFRAME_B, ftPROP_TS31, 2, 16000},
+@@ -313,7 +311,7 @@ struct fr_cdesc test3[] = {
+ 	{ftFAS, ftPROP_FAIL, 1, 1},
+ 	{ftBIT2, ftPROP_NONE, 1, 1},
+ 	{ftMFB, ftPROP_NONE, 16, 250},
+-	
++
+ 	{ftMFB, ftPROP_NONE, 16, 1},
+ 	{ftMFA, ftPROP_NONE, 16, 1},
+ 	{ftMFB, ftPROP_NONE, 16, 4},
+@@ -323,11 +321,11 @@ struct fr_cdesc test3[] = {
+ 	{ftMFA, ftPROP_NONE, 16, 1},
+ 	{ftMFB, ftPROP_NONE, 16, 2},
+ 	{ftMFA, ftPROP_NONE, 16, 1},
+-	
++
+ 	{ftMFA, ftPROP_NONE, 16, 1},
+ 	{ftMFB, ftPROP_NONE, 16, 2},
+ 	{ftMFA, ftPROP_NONE, 16, 2},
+-	
++
+ 	{ftCtrl_Repeat, ftPROP_NONE, 0, 500},
+ 	{ftMFB, ftPROP_NONE, 16, 1},
+ 	{ftMFA, ftPROP_NONE, 16, 1},
+@@ -336,7 +334,6 @@ struct fr_cdesc test3[] = {
+ 	{ftCtrl_Stop, ftPROP_NONE, 0, 0}
+ };
+ 
+-
+ struct fr_cdesc test4[] = {
+ 	{ftFRAME_B, ftPROP_TS31, 2, 16000},
+ 
+@@ -366,7 +363,7 @@ struct fr_cdesc test4[] = {
+ 	{ftFAS, ftPROP_FAIL, 1, 1},
+ 	{ftBIT2, ftPROP_NONE, 1, 1},
+ 	{ftMFB, ftPROP_NONE, 16, 250},
+-	
++
+ 	{ftMFB, ftPROP_NONE, 16, 1},
+ 	{ftMFA, ftPROP_NONE, 16, 1},
+ 	{ftMFB, ftPROP_NONE, 16, 4},
+@@ -376,11 +373,11 @@ struct fr_cdesc test4[] = {
+ 	{ftMFA, ftPROP_NONE, 16, 1},
+ 	{ftMFB, ftPROP_NONE, 16, 2},
+ 	{ftMFA, ftPROP_NONE, 16, 1},
+-	
++
+ 	{ftMFA, ftPROP_NONE, 16, 1},
+ 	{ftMFB, ftPROP_NONE, 16, 2},
+ 	{ftMFA, ftPROP_NONE, 16, 2},
+-	
++
+ 	{ftCtrl_Repeat, ftPROP_NONE, 0, 500},
+ 	{ftMFB, ftPROP_NONE, 16, 1},
+ 	{ftMFA, ftPROP_NONE, 16, 1},
+@@ -389,15 +386,13 @@ struct fr_cdesc test4[] = {
+ 	{ftCtrl_Stop, ftPROP_NONE, 0, 0}
+ };
+ 
+-
+ static uint8_t mfr_sync;
+ static uint8_t startcnt = MFR_SYNC_BITS;
+ 
+-static uint8_t	*inbuf, *ib_p, *ib_end;
+-static int	ib_size, ib_pos;
+-static uint8_t	*outbuf, *ob_p, *ob_end;
+-static int	ob_size, ob_pos;
+-
++static uint8_t *inbuf, *ib_p, *ib_end;
++static int ib_size, ib_pos;
++static uint8_t *outbuf, *ob_p, *ob_end;
++static int ob_size, ob_pos;
+ 
+ enum FSyncState {
+ 	FSync_None,
+@@ -411,42 +406,40 @@ enum MFRSyncState {
+ 	MFR_State_Sync
+ };
+ 
+-
+ static enum FSyncState fsync_state = FSync_None;
+ static enum MFRSyncState mfr_state = MFR_State_NotSync;
+ 
+-static uint8_t	*last_mfrs;
++static uint8_t *last_mfrs;
+ 
+ static int good_mfr, bad_mfr;
+ 
+-
+ static int debuglevel = 0;
+ static int RawReadMode = 0;
+ static int cardnr = 0;
+-static char * WriteFileName = NULL;
++static char *WriteFileName = NULL;
+ static int ListMode = 0;
+ struct fr_cdesc *Test = test0;
+ static void usage(char *pname)
+ {
+-	fprintf(stderr,"Call with %s [options]\n", pname);
+-	fprintf(stderr,"\n");
+-	fprintf(stderr,"\n     Valid options are:\n");
+-	fprintf(stderr,"\n");
+-	fprintf(stderr,"  --help    -?              Usage ; printout this information\n");
+-	fprintf(stderr,"  --card   -c <number>      use card number # (default 0)\n");
+-	fprintf(stderr,"  --flat   -f               list flat test frame description\n");
+-	fprintf(stderr,"  --list   -l               list test frame description\n");
+-	fprintf(stderr,"  --raw    -r               rawread only mode\n");
+-	fprintf(stderr,"  --debug  -d <level>       debuglevel\n");
+-	fprintf(stderr,"  --test   -t <test #>      generate data for test # (default 0)\n");
+-	fprintf(stderr,"  --write  -w <file>        write <file>\n");
+-	fprintf(stderr,"\n");
+-	fprintf(stderr,"Tests:\n");
+-	fprintf(stderr,"      0  - 10 seconds normal CRC4 framing\n");
+-	fprintf(stderr,"      1  - TBR4 B.4.2 (table B.1)\n");
+-	fprintf(stderr,"      2  - TBR4 B.5.2 (table B.2)\n");
+-	fprintf(stderr,"      3  - TBR4 B.5.3 (table B.3)\n");
+-	fprintf(stderr,"\n");
++	fprintf(stderr, "Call with %s [options]\n", pname);
++	fprintf(stderr, "\n");
++	fprintf(stderr, "\n     Valid options are:\n");
++	fprintf(stderr, "\n");
++	fprintf(stderr, "  --help    -?              Usage ; printout this information\n");
++	fprintf(stderr, "  --card   -c <number>      use card number # (default 0)\n");
++	fprintf(stderr, "  --flat   -f               list flat test frame description\n");
++	fprintf(stderr, "  --list   -l               list test frame description\n");
++	fprintf(stderr, "  --raw    -r               rawread only mode\n");
++	fprintf(stderr, "  --debug  -d <level>       debuglevel\n");
++	fprintf(stderr, "  --test   -t <test #>      generate data for test # (default 0)\n");
++	fprintf(stderr, "  --write  -w <file>        write <file>\n");
++	fprintf(stderr, "\n");
++	fprintf(stderr, "Tests:\n");
++	fprintf(stderr, "      0  - 10 seconds normal CRC4 framing\n");
++	fprintf(stderr, "      1  - TBR4 B.4.2 (table B.1)\n");
++	fprintf(stderr, "      2  - TBR4 B.5.2 (table B.2)\n");
++	fprintf(stderr, "      3  - TBR4 B.5.3 (table B.3)\n");
++	fprintf(stderr, "\n");
+ }
+ 
+ static int opt_parse(int ac, char *av[])
+@@ -512,7 +505,7 @@ static int opt_parse(int ac, char *av[])
+ 			break;
+ 		case 't':
+ 			if (optarg) {
+-				switch(*optarg) {
++				switch (*optarg) {
+ 				case '0':
+ 					Test = test0;
+ 					break;
+@@ -547,9 +540,6 @@ static int opt_parse(int ac, char *av[])
+ 	return 0;
+ }
+ 
+-
+-
+-
+ static void printbinary(char *name, uint32_t val, uint8_t bits)
+ {
+ 	uint32_t m;
+@@ -559,7 +549,7 @@ static void printbinary(char *name, uint32_t val, uint8_t bits)
+ 
+ 	printf("%s: ", name);
+ 
+-	m = 1 << (bits -1);
++	m = 1 << (bits - 1);
+ 	while (m) {
+ 		printf("%c", val & m ? '1' : '0');
+ 		m >>= 1;
+@@ -572,9 +562,9 @@ static void printhex(unsigned char *p, uint16_t idx, int len, int head)
+ 
+ 	for (i = 1; i <= len; i++) {
+ 		printf(" %02x", p[idx++]);
+-		if ((i!=len) && !(i % 4) && (i % 16))
++		if ((i != len) && !(i % 4) && (i % 16))
+ 			printf(" ");
+-		if ((i!=len) && !(i % 16)) {
++		if ((i != len) && !(i % 16)) {
+ 			printf("\n");
+ 			for (j = 0; j < head; j++)
+ 				printf(" ");
+@@ -594,16 +584,16 @@ void calc_bitswap_table(void)
+ 	uint8_t v = 0;
+ 
+ 	do {
+-		bitswap_tbl[v] =  (((v & 0x01) << 7) | ((v & 0x02) << 5) | ((v & 0x04) << 3) | ((v & 0x08) << 1) |
+-			((v & 0x10) >> 1) | ((v & 0x20) >> 3) | ((v & 0x40) >> 5) | ((v & 0x80) >> 7));
++		bitswap_tbl[v] = (((v & 0x01) << 7) | ((v & 0x02) << 5) | ((v & 0x04) << 3) | ((v & 0x08) << 1) |
++				  ((v & 0x10) >> 1) | ((v & 0x20) >> 3) | ((v & 0x40) >> 5) | ((v & 0x80) >> 7));
+ 		v++;
+ 	} while (v != 0);
+ }
+ 
+-static uint8_t calc_crc4(uint8_t *data, uint16_t start, int len)
++static uint8_t calc_crc4(uint8_t * data, uint16_t start, int len)
+ {
+ 	uint16_t i, idx = start;
+-	uint8_t  b, crc4 = 0;
++	uint8_t b, crc4 = 0;
+ 
+ 	for (i = 0; i < len; i++) {
+ 		b = bitswap_tbl[data[idx]];
+@@ -616,17 +606,17 @@ static uint8_t calc_crc4(uint8_t *data, uint16_t start, int len)
+ 	return crc4;
+ };
+ 
+-static uint8_t calc_and_set_crc4_smf(uint8_t *smf, uint8_t crc)
++static uint8_t calc_and_set_crc4_smf(uint8_t * smf, uint8_t crc)
+ {
+ 	uint16_t i;
+-	uint8_t  d, b, crc4 = 0;
++	uint8_t d, b, crc4 = 0;
+ 
+ 	for (i = 0; i < SMFR_SIZE; i++) {
+ 		d = smf[i];
+-		if (!(i % 64)) { /* Cx bit */
++		if (!(i % 64)) {	/* Cx bit */
+ 			d &= 0xfe;
+ 			b = bitswap_tbl[d];
+-			if (crc != 0xff) { /* no set if ff */
++			if (crc != 0xff) {	/* no set if ff */
+ 				if (crc & 8)
+ 					d |= 1;
+ 				crc <<= 1;
+@@ -643,7 +633,7 @@ static uint8_t calc_and_set_crc4_smf(uint8_t *smf, uint8_t crc)
+ }
+ 
+ #ifdef NOT_USED_YET
+-static uint8_t get_crc4_smf(uint8_t *smf)
++static uint8_t get_crc4_smf(uint8_t * smf)
+ {
+ 	uint16_t i;
+ 	uint8_t crc4 = 0;
+@@ -656,8 +646,8 @@ static uint8_t get_crc4_smf(uint8_t *smf)
+ }
+ #endif
+ 
+-static int cur_Err = 0;// cur_RAI = 0;
+-static int analyse_mfr(uint8_t *p)
++static int cur_Err = 0;		// cur_RAI = 0;
++static int analyse_mfr(uint8_t * p)
+ {
+ 	uint16_t i, t0idx;
+ 	uint8_t d, crcfr[16];
+@@ -682,7 +672,7 @@ static int analyse_mfr(uint8_t *p)
+ 		case ftAIS:
+ 			stim = "AIS";
+ 			break;
+-		/* Basic Frames */
++			/* Basic Frames */
+ 		case ftFAS:
+ 			if (dsc->prop & ftPROP_FAIL)
+ 				stim = "/FAS";
+@@ -695,21 +685,21 @@ static int analyse_mfr(uint8_t *p)
+ 			else
+ 				stim = "BIT 2";
+ 			break;
+-		/* Sub multi frames */
++			/* Sub multi frames */
+ 		case ftSMFA:
+ 			stim = "SMF A";
+ 			break;
+ 		case ftSMFB:
+ 			stim = "SMF B";
+ 			break;
+-		/* Multi frames */
++			/* Multi frames */
+ 		case ftMFA:
+ 			stim = "MF A";
+ 			break;
+ 		case ftMFB:
+ 			stim = "MF B";
+ 			break;
+-		/* Frames */
++			/* Frames */
+ 		case ftFRAME_A:
+ 			stim = "FRAME A";
+ 			break;
+@@ -724,8 +714,8 @@ static int analyse_mfr(uint8_t *p)
+ 			break;
+ 		}
+ 	}
+-	
+-	printf("Time:%6d ms {TX: %-7s} MFR %5d Error %3d ", ob_pos/DATA_SIZE_1MS, stim, good_mfr, bad_mfr);
++
++	printf("Time:%6d ms {TX: %-7s} MFR %5d Error %3d ", ob_pos / DATA_SIZE_1MS, stim, good_mfr, bad_mfr);
+ 	last_mfrs = p;
+ 	p -= MFR_SYNC_OFFSET * FRAME_SIZE;
+ 	for (i = 0; i < 16; i++) {
+@@ -743,7 +733,7 @@ static int analyse_mfr(uint8_t *p)
+ 			}
+ 		} else {
+ 			C <<= 1;
+-			C |= ( 0x1 & d);
++			C |= (0x1 & d);
+ 		}
+ 	}
+ 	cr0 = calc_and_set_crc4_smf(p, 0xff);
+@@ -776,12 +766,12 @@ static int analyse_mfr(uint8_t *p)
+ 	return 0;
+ }
+ 
+-
+ /*
+  * Write one multiframe 16 * 2048 bit ; 512 bytes
+  * returns the CRC4 for the next sub multiframe
+  */
+-uint8_t fill_outframe(uint8_t *of, uint8_t A, uint8_t E, uint8_t S, uint8_t F, uint8_t cr0, uint8_t MFRSW, uint8_t *dch, uint8_t def)
++uint8_t fill_outframe(uint8_t * of, uint8_t A, uint8_t E, uint8_t S, uint8_t F, uint8_t cr0, uint8_t MFRSW, uint8_t * dch,
++		      uint8_t def)
+ {
+ 	uint16_t i, tidx;
+ 	static unsigned char p;
+@@ -789,7 +779,7 @@ uint8_t fill_outframe(uint8_t *of, uint8_t A, uint8_t E, uint8_t S, uint8_t F, u
+ 
+ 	tidx = 0;
+ 	for (i = 0; i < 16; i++) {
+-		if (i & 1) { /* NFAS */
++		if (i & 1) {	/* NFAS */
+ 			p = 0xf8 & S;
+ 			if (A & 0x80)
+ 				p |= 4;
+@@ -810,7 +800,7 @@ uint8_t fill_outframe(uint8_t *of, uint8_t A, uint8_t E, uint8_t S, uint8_t F, u
+ 		of[tidx] = p;
+ 		tidx++;
+ 		for (j = 1; j < 32; j++) {
+-			if (j == 16) { /* D channel */
++			if (j == 16) {	/* D channel */
+ 				of[tidx] = *dch;
+ 				dch++;
+ 			} else
+@@ -987,7 +977,7 @@ static int process_data(int cnt)
+ 				break;
+ 			}
+ 			break;
+-		default: /* not possible here */
++		default:	/* not possible here */
+ 			fprintf(stderr, "Line %d: Wrong state %d\n", __LINE__, frT[0]);
+ 			exit(1);
+ 			break;
+@@ -1008,7 +998,7 @@ static int process_data(int cnt)
+ 						mfr_state = MFR_State_Sync;
+ 						good_mfr = 1;
+ 						analyse_mfr(ib_cp);
+-					} else  if (dist == 16 * 32) {
++					} else if (dist == 16 * 32) {
+ 						good_mfr++;
+ 						analyse_mfr(ib_cp);
+ 					}
+@@ -1050,7 +1040,7 @@ static int fill_buffer(unsigned char *p, int len)
+ }
+ 
+ /* returns next start frame */
+-static uint8_t *fill_timeslot(uint8_t *p0, int ts, uint8_t *data, int datalen, int repeat)
++static uint8_t *fill_timeslot(uint8_t * p0, int ts, uint8_t * data, int datalen, int repeat)
+ {
+ 	uint8_t *p = p0;
+ 	int i, cnt = repeat;
+@@ -1065,8 +1055,8 @@ static uint8_t *fill_timeslot(uint8_t *p0, int ts, uint8_t *data, int datalen, i
+ 	return p;
+ }
+ 
+-uint8_t *fill_timeslot_ts0_smf(uint8_t *p0, int ts, int smf, uint8_t fas_err, uint8_t nfas_err, uint8_t mfsw,
+-	uint8_t S, uint8_t A, uint8_t C, uint8_t E, int repeat)
++uint8_t *fill_timeslot_ts0_smf(uint8_t * p0, int ts, int smf, uint8_t fas_err, uint8_t nfas_err, uint8_t mfsw,
++			       uint8_t S, uint8_t A, uint8_t C, uint8_t E, int repeat)
+ {
+ 	uint8_t *p = p0;
+ 	uint8_t i, d[8], a, c, e, n, f, m;
+@@ -1087,8 +1077,8 @@ uint8_t *fill_timeslot_ts0_smf(uint8_t *p0, int ts, int smf, uint8_t fas_err, ui
+ 			m = mfsw >> 4;
+ 		}
+ 		for (i = 0; i < 8; i++) {
+-			if (i & 1) { /* NFAS */
+-				if (n & 8) /* nfas error */
++			if (i & 1) {	/* NFAS */
++				if (n & 8)	/* nfas error */
+ 					d[i] = 0;
+ 				else
+ 					d[i] = 2;
+@@ -1106,8 +1096,8 @@ uint8_t *fill_timeslot_ts0_smf(uint8_t *p0, int ts, int smf, uint8_t fas_err, ui
+ 				if (a & 8)
+ 					d[i] |= 4;
+ 				a <<= 1;
+-			} else { /* FAS */
+-				if (f & 8) /* FAS error */
++			} else {	/* FAS */
++				if (f & 8)	/* FAS error */
+ 					d[i] = 0xc8;
+ 				else
+ 					d[i] = FR_FAS_VAL;
+@@ -1124,7 +1114,7 @@ uint8_t *fill_timeslot_ts0_smf(uint8_t *p0, int ts, int smf, uint8_t fas_err, ui
+ 	return p;
+ }
+ 
+-static uint8_t *calc_and_set_crc4_ts(uint8_t *start, uint8_t ts, uint8_t *first_last_crc, int smf_count)
++static uint8_t *calc_and_set_crc4_ts(uint8_t * start, uint8_t ts, uint8_t * first_last_crc, int smf_count)
+ {
+ 	uint8_t crc = *first_last_crc & 0xf;
+ 	uint8_t wrong_crc = *first_last_crc & 0xf0;
+@@ -1141,12 +1131,12 @@ static uint8_t *calc_and_set_crc4_ts(uint8_t *start, uint8_t ts, uint8_t *first_
+ 	return p;
+ }
+ 
+-static int transmit(int sock, uint8_t *ob, uint16_t len)
++static int transmit(int sock, uint8_t * ob, uint16_t len)
+ {
+-	struct msghdr	mh;
+-	struct iovec	iov[2];
++	struct msghdr mh;
++	struct iovec iov[2];
+ 	int ret;
+-	struct mISDNhead hh = {PH_DATA_REQ, 1};
++	struct mISDNhead hh = { PH_DATA_REQ, 1 };
+ 
+ 	mh.msg_name = NULL;
+ 	mh.msg_namelen = 0;
+@@ -1161,8 +1151,7 @@ static int transmit(int sock, uint8_t *ob, uint16_t len)
+ 	iov[1].iov_len = len;
+ 	ret = sendmsg(sock, &mh, 0);
+ 	if (ret != (len + MISDN_HEADER_LEN)) {
+-		fprintf(stderr, "Send error %d (%d + %d) - %s\n", ret,
+-			(int)MISDN_HEADER_LEN, len, strerror(errno));
++		fprintf(stderr, "Send error %d (%d + %d) - %s\n", ret, (int)MISDN_HEADER_LEN, len, strerror(errno));
+ 		ret = 0;
+ 	} else
+ 		ret = len;
+@@ -1176,7 +1165,7 @@ static int last_dlen = 64;
+ static int receive_ts0dch(int socket)
+ {
+ 	int ret, cnt, head;
+-	uint8_t	buffer[MAX_RECV_BUFFER_SIZE];
++	uint8_t buffer[MAX_RECV_BUFFER_SIZE];
+ 	struct mISDNhead *hh = (struct mISDNhead *)buffer;
+ 
+ 	ret = recv(socket, buffer, MAX_RECV_BUFFER_SIZE, 0);
+@@ -1186,9 +1175,9 @@ static int receive_ts0dch(int socket)
+ 	}
+ #if 0
+ 	if (cts.cmsg_type == MISDN_TIME_STAMP) {
+-		mt = localtime((time_t *)&cts.tv.tv_sec);
++		mt = localtime((time_t *) & cts.tv.tv_sec);
+ 		head = printf("%02d.%02d.%04d %02d:%02d:%02d.%06ld", mt->tm_mday, mt->tm_mon + 1, mt->tm_year + 1900,
+-			mt->tm_hour, mt->tm_min, mt->tm_sec, cts.tv.tv_usec);
++			      mt->tm_hour, mt->tm_min, mt->tm_sec, cts.tv.tv_usec);
+ 	} else {
+ 		cts.tv.tv_sec = 0;
+ 		cts.tv.tv_usec = 0;
+@@ -1218,7 +1207,7 @@ static int receive_ts0dch(int socket)
+ 		if (!RawReadMode) {
+ 			ob_pos = ob_p - outbuf;
+ 			if ((ob_pos + last_dlen) >= ob_size) {
+-				ret = -1; /* stop */
++				ret = -1;	/* stop */
+ 				last_dlen = ob_size - ob_pos;
+ 			}
+ 			if (debuglevel == 5) {
+@@ -1271,7 +1260,7 @@ static void print_testdescription(struct fr_cdesc *arg)
+ 			case ftAIS:
+ 				fprintf(stdout, "%-8s", "AIS");
+ 				break;
+-			/* Basic Frames */
++				/* Basic Frames */
+ 			case ftFAS:
+ 				if (dsc->prop & ftPROP_FAIL)
+ 					fprintf(stdout, "%-8s", "/FAS");
+@@ -1284,21 +1273,21 @@ static void print_testdescription(struct fr_cdesc *arg)
+ 				else
+ 					fprintf(stdout, "%-8s", "BIT 2");
+ 				break;
+-			/* Sub multi frames */
++				/* Sub multi frames */
+ 			case ftSMFA:
+ 				fprintf(stdout, "%-8s", "SMF A");
+ 				break;
+ 			case ftSMFB:
+ 				fprintf(stdout, "%-8s", "SMF B");
+ 				break;
+-			/* Multi frames */
++				/* Multi frames */
+ 			case ftMFA:
+ 				fprintf(stdout, "%-8s", "MF A");
+ 				break;
+ 			case ftMFB:
+ 				fprintf(stdout, "%-8s", "MF B");
+ 				break;
+-			/* Frames */
++				/* Frames */
+ 			case ftFRAME_A:
+ 				fprintf(stdout, "%-8s", "FRAME A");
+ 				break;
+@@ -1336,8 +1325,8 @@ static void print_flatdescription(struct fr_flatdesc *dsc)
+ 		} else if (dsc->type == ftCtrl_Stop) {
+ 			fprintf(stdout, "End of test\n");
+ 			break;
+-		} else if (dsc->type ==  ftAIS) {
+-				fprintf(stdout, "%7d %2d %-6s", dsc->pos, dsc->mf_pos, "AIS");
++		} else if (dsc->type == ftAIS) {
++			fprintf(stdout, "%7d %2d %-6s", dsc->pos, dsc->mf_pos, "AIS");
+ 		} else if (dsc->type == ftFAS) {
+ 			if (dsc->prop & ftPROP_FAIL)
+ 				fprintf(stdout, "%7d %2d %-6s", dsc->pos, dsc->mf_pos, "/FAS");
+@@ -1353,7 +1342,7 @@ static void print_flatdescription(struct fr_flatdesc *dsc)
+ 		case ftAIS:
+ 			fprintf(stdout, "[%-7s]", "AIS");
+ 			break;
+-		/* Basic Frames */
++			/* Basic Frames */
+ 		case ftFAS:
+ 			if (dsc->prop & ftPROP_FAIL)
+ 				fprintf(stdout, "[%-7s]", "/FAS");
+@@ -1366,21 +1355,21 @@ static void print_flatdescription(struct fr_flatdesc *dsc)
+ 			else
+ 				fprintf(stdout, "[%-7s]", "BIT 2");
+ 			break;
+-		/* Sub multi frames */
++			/* Sub multi frames */
+ 		case ftSMFA:
+ 			fprintf(stdout, "[%-7s]", "SMF A");
+ 			break;
+ 		case ftSMFB:
+ 			fprintf(stdout, "[%-7s]", "SMF B");
+ 			break;
+-		/* Multi frames */
++			/* Multi frames */
+ 		case ftMFA:
+ 			fprintf(stdout, "[%-7s]", "MF A");
+ 			break;
+ 		case ftMFB:
+ 			fprintf(stdout, "[%-7s]", "MF B");
+ 			break;
+-		/* Frames */
++			/* Frames */
+ 		case ftFRAME_A:
+ 			fprintf(stdout, "[%-7s]", "FRAME A");
+ 			break;
+@@ -1399,7 +1388,7 @@ static void print_flatdescription(struct fr_flatdesc *dsc)
+ 		if (dsc->prop & ftPROP_MFAS)
+ 			fprintf(stdout, " (MFAS Error)");
+ 		if (dsc->prop & ftPROP_TS31)
+-				fprintf(stdout, " (TS 31)");
++			fprintf(stdout, " (TS 31)");
+ 		if (dsc->prop & ftPROP_START)
+ 			fprintf(stdout, " (Start Test)");
+ 		fprintf(stdout, "\n");
+@@ -1499,7 +1488,7 @@ static struct fr_flatdesc *make_flat_description(struct fr_cdesc *test, struct f
+ 				break;
+ 			}
+ 			end = flat;
+-			repeat[csp]--; /* one already done */
++			repeat[csp]--;	/* one already done */
+ 			while (repeat[csp]) {
+ 				seq = start[csp];
+ 				while (seq != end) {
+@@ -1509,7 +1498,7 @@ static struct fr_flatdesc *make_flat_description(struct fr_cdesc *test, struct f
+ 					seq++;
+ 					flat++;
+ 					pos++;
+-				} 
++				}
+ 				--repeat[csp];
+ 			}
+ 			csp--;
+@@ -1517,7 +1506,7 @@ static struct fr_flatdesc *make_flat_description(struct fr_cdesc *test, struct f
+ 			for (cnt = 0; cnt < dsc->count; cnt++) {
+ 				switch (dsc->type) {
+ 				case ftAIS:
+-				/* Basic Frames */
++					/* Basic Frames */
+ 				case ftFAS:
+ 				case ftBIT2:
+ 					flat->pos = pos;
+@@ -1527,7 +1516,7 @@ static struct fr_flatdesc *make_flat_description(struct fr_cdesc *test, struct f
+ 					flat++;
+ 					pos++;
+ 					break;
+-				/* Sub multi frames */
++					/* Sub multi frames */
+ 				case ftSMFA:
+ 					for (i = 0; i < 8; i++) {
+ 						flat->pos = pos;
+@@ -1555,7 +1544,7 @@ static struct fr_flatdesc *make_flat_description(struct fr_cdesc *test, struct f
+ 						pos++;
+ 					}
+ 					break;
+-				/* Multi frames */
++					/* Multi frames */
+ 				case ftMFA:
+ 					for (i = 0; i < 16; i++) {
+ 						flat->pos = pos;
+@@ -1583,7 +1572,7 @@ static struct fr_flatdesc *make_flat_description(struct fr_cdesc *test, struct f
+ 						pos++;
+ 					}
+ 					break;
+-				/* Frames */
++					/* Frames */
+ 				case ftFRAME_A:
+ 					flat->pos = pos;
+ 					flat->otype = dsc->type;
+@@ -1649,11 +1638,11 @@ static struct fr_flatdesc *make_flat_description(struct fr_cdesc *test, struct f
+ 			flat->mf_pos = 0xff;
+ 			flat->mf_pos = 14;
+ 		} else if (flat->type == ftFAS) {
+-			if (mfpos & 1) /* reset */
++			if (mfpos & 1)	/* reset */
+ 				mfpos = 0;
+ 		} else if (flat->type == ftBIT2) {
+-			 if (!(mfpos & 1))
+-			 	mfpos = 1;
++			if (!(mfpos & 1))
++				mfpos = 1;
+ 		}
+ 		flat->mf_pos = mfpos;
+ 		mfpos++;
+@@ -1666,15 +1655,15 @@ static struct fr_flatdesc *make_flat_description(struct fr_cdesc *test, struct f
+ 
+ static struct fr_data *gen_flat_frame_desc(struct fr_cdesc *dsc)
+ {
+-	struct fr_data		loc_frd, *frd;
+-	struct fr_flatdesc	*flat_dsc;
+-	int			cnt, sum, pre;
++	struct fr_data loc_frd, *frd;
++	struct fr_flatdesc *flat_dsc;
++	int cnt, sum, pre;
+ 
+ 	pre = calc_flatcount(preamble);
+ 	cnt = calc_flatcount(dsc);
+ 	sum = pre + cnt;
+ 	loc_frd.count = sum;
+-	flat_dsc = calloc(sum + 2, sizeof(*flat_dsc)); /* reserve for stop */
++	flat_dsc = calloc(sum + 2, sizeof(*flat_dsc));	/* reserve for stop */
+ 	if (!flat_dsc) {
+ 		fprintf(stderr, "No memory to allocate %d * %zd bytes for flat description\n", loc_frd.count, sizeof(*flat_dsc));
+ 		return NULL;
+@@ -1702,7 +1691,8 @@ static struct fr_data *gen_flat_frame_desc(struct fr_cdesc *dsc)
+ 	return frd;
+ }
+ 
+-static int gen_flat_frame_data(struct fr_data *frd) {
++static int gen_flat_frame_data(struct fr_data *frd)
++{
+ 	struct fr_flatdesc *flat;
+ 	size_t size;
+ 	int ret = 0;
+@@ -1712,7 +1702,7 @@ static int gen_flat_frame_data(struct fr_data *frd) {
+ 	size = frd->count;
+ 	size *= FRAME_SIZE;
+ 	frd->data_size = size;
+-	frd->data = malloc(size + 100 * FRAME_SIZE); /* Reserve to avoid crash when manipulate frames on the end */
++	frd->data = malloc(size + 100 * FRAME_SIZE);	/* Reserve to avoid crash when manipulate frames on the end */
+ 	if (!frd->data) {
+ 		fprintf(stderr, "No memory to allocate %zd + %d bytes\n", size, 100 * FRAME_SIZE);
+ 		flat = NULL;
+@@ -1759,7 +1749,7 @@ static int gen_flat_frame_data(struct fr_data *frd) {
+ 		flat++;
+ 	}
+ 	p = frd->data;
+-	crc = 0; /* start value */
++	crc = 0;		/* start value */
+ 	flat = frd->desc;
+ 	while (flat) {
+ 		if (flat->type == ftNone) {
+@@ -1785,28 +1775,27 @@ static int gen_flat_frame_data(struct fr_data *frd) {
+ 			}
+ 		}
+ 		flat++;
+-	}	
+-	return ret;		
++	}
++	return ret;
+ }
+ 
+-int
+-main(argc, argv)
++int main(argc, argv)
+ int argc;
+ char *argv[];
+ {
+-	int	i, channel;
+-	int	log_socket;
+-	struct sockaddr_mISDN  log_addr;
+-	int	buflen = 4104;
+-	u_char	buffer[buflen];
+-	int	result;
+-	int	cnt, dlen;
+-	struct mISDN_devinfo	di;
+-	struct mISDNhead 	*hh;
+-	struct mISDNversion	ver;
++	int i, channel;
++	int log_socket;
++	struct sockaddr_mISDN log_addr;
++	int buflen = 4104;
++	u_char buffer[buflen];
++	int result;
++	int cnt, dlen;
++	struct mISDN_devinfo di;
++	struct mISDNhead *hh;
++	struct mISDNversion ver;
+ 	struct pollfd pfd[8];
+ 	int pfd_nr;
+-	struct mISDN_ctrl_req	 creq;
++	struct mISDN_ctrl_req creq;
+ 
+ 	result = opt_parse(argc, argv);
+ 	if (result) {
+@@ -1832,12 +1821,12 @@ char *argv[];
+ 	}
+ 	result = gen_flat_frame_data(TestData);
+ 	if (result) {
+-		fprintf(stderr,"Error generating test data\n");
++		fprintf(stderr, "Error generating test data\n");
+ 		exit(1);
+ 	}
+ 
+ 	if (cardnr < 0) {
+-		fprintf(stderr,"card nr may not be negative\n");
++		fprintf(stderr, "card nr may not be negative\n");
+ 		exit(1);
+ 	}
+ 
+@@ -1852,7 +1841,8 @@ char *argv[];
+ 		exit(1);
+ 	}
+ 	if (ver.release & MISDN_GIT_RELEASE)
+-		printf("mISDN kernel version %d.%02d.%d (git.misdn.eu) found\n", ver.major, ver.minor, ver.release & ~MISDN_GIT_RELEASE);
++		printf("mISDN kernel version %d.%02d.%d (git.misdn.eu) found\n", ver.major, ver.minor,
++		       ver.release & ~MISDN_GIT_RELEASE);
+ 	else
+ 		printf("mISDN kernel version %d.%02d.%d found\n", ver.major, ver.minor, ver.release);
+ 
+@@ -1868,7 +1858,7 @@ char *argv[];
+ 		printf("ioctl error %s\n", strerror(errno));
+ 		exit(1);
+ 	} else
+-		printf("%d controller%s found\n", cnt, (cnt==1)?"":"s");
++		printf("%d controller%s found\n", cnt, (cnt == 1) ? "" : "s");
+ 
+ 	di.id = cardnr;
+ 	result = ioctl(log_socket, IMGETDEVINFO, &di);
+@@ -1903,10 +1893,10 @@ char *argv[];
+ 	ib_p = inbuf;
+ 	ib_cp = inbuf;
+ 	ib_end = outbuf + ib_size;
+-	
++
+ 	/* Ready for transmit */
+ 	ob_p = outbuf;
+-	
++
+ 	if ((log_socket = socket(PF_ISDN, SOCK_DGRAM, ISDN_P_B_RAW)) < 0) {
+ 		printf("could not open log socket %s\n", strerror(errno));
+ 		exit(1);
+@@ -1919,7 +1909,7 @@ char *argv[];
+ 	channel = 0;
+ 
+ 	log_addr.channel = (unsigned char)channel;
+-	result = bind(log_socket, (struct sockaddr *) &log_addr, sizeof(log_addr));
++	result = bind(log_socket, (struct sockaddr *)&log_addr, sizeof(log_addr));
+ 	printf("log bind ch(%i) return %d\n", log_addr.channel, result);
+ 	if (result < 0) {
+ 		printf("log bind error %s\n", strerror(errno));
+@@ -1958,10 +1948,8 @@ char *argv[];
+ 		exit(1);
+ 	}
+ 
+-
+ 	if (debuglevel)
+-		fprintf(stdout,"MISDN_CTRL_GETOP ioctl supported operations %x\n", creq.op);
+-
++		fprintf(stdout, "MISDN_CTRL_GETOP ioctl supported operations %x\n", creq.op);
+ 
+ 	/* This set the register values in the card so, that the TS0  is not in full transparent mode,
+ 	 * so the receiver can syncronize - this allows to get the TS0 data on byte boundaries, so bit shifting all
+@@ -1970,14 +1958,14 @@ char *argv[];
+ 
+ 	creq.op = MISDN_CTRL_L1_TS0_MODE;
+ 	creq.channel = 0;
+-	creq.p1 = 0x06; /* R_RX_SL0_CFG0 =  (V_AUTOSYNC | V_AUTO_RECO) */
+-	creq.p2 = 0x31; /* R_TX_SL0_CFG1 = (V_TX_MF | V_TX_E | V_INV_E) */
++	creq.p1 = 0x06;		/* R_RX_SL0_CFG0 =  (V_AUTOSYNC | V_AUTO_RECO) */
++	creq.p2 = 0x31;		/* R_TX_SL0_CFG1 = (V_TX_MF | V_TX_E | V_INV_E) */
+ 	creq.unused = 0;
+ 	if (debuglevel)
+-		fprintf(stdout,"L1 TS0  ioctl R_RX_SL0_CFG0=%02x R_TX_SL0_CFG1=%02x\n", creq.p1, creq.p2);
++		fprintf(stdout, "L1 TS0  ioctl R_RX_SL0_CFG0=%02x R_TX_SL0_CFG1=%02x\n", creq.p1, creq.p2);
+ 	result = ioctl(log_socket, IMCTRLREQ, &creq);
+ 	if (debuglevel)
+-		fprintf(stdout,"L1 TS0  ioctl old register values R_RX_SL0_CFG0=%02x R_TX_SL0_CFG1=%02x\n", creq.p1, creq.p2);
++		fprintf(stdout, "L1 TS0  ioctl old register values R_RX_SL0_CFG0=%02x R_TX_SL0_CFG1=%02x\n", creq.p1, creq.p2);
+ 	if (result < 0) {
+ 		fprintf(stdout, "Error on MISDN_CTRL_L1_TS0_MODE ioctl - %s\n", strerror(errno));
+ 		close(log_socket);
+@@ -1985,7 +1973,7 @@ char *argv[];
+ 	}
+ 
+ 	hh->prim = PH_ACTIVATE_REQ;
+-	hh->id   = MISDN_ID_ANY;
++	hh->id = MISDN_ID_ANY;
+ 	result = sendto(log_socket, buffer, MISDN_HEADER_LEN, 0, NULL, 0);
+ 
+ 	if (result < 0) {
+@@ -2007,13 +1995,12 @@ char *argv[];
+ 		exit(1);
+ 	}
+ 	if (debuglevel)
+-		fprintf(stdout,"RX_OFF  result %d ioctl p1=%02x p2=%02x p3=%02x\n",
+-			result, creq.p1, creq.p2, creq.unused);
++		fprintf(stdout, "RX_OFF  result %d ioctl p1=%02x p2=%02x p3=%02x\n", result, creq.p1, creq.p2, creq.unused);
+ 
+ 	creq.op = MISDN_CTRL_L1_GET_SYNC_INFO;
+ 	creq.channel = 0;
+ 	cnt = 0;
+-	/* Wait for sync - this will make sure that we do not need bit shifting incomming data */ 
++	/* Wait for sync - this will make sure that we do not need bit shifting incomming data */
+ 	for (i = 0; i < 5000; i++) {
+ 		result = ioctl(log_socket, IMCTRLREQ, &creq);
+ 		if (result < 0) {
+@@ -2022,8 +2009,7 @@ char *argv[];
+ 			exit(1);
+ 		}
+ 		if (debuglevel)
+-			fprintf(stdout,"L1 GET_SYNC_INFO ioctl p1=%02x p2=%02x p3=%02x\n",
+-				creq.p1, creq.p2, creq.unused);
++			fprintf(stdout, "L1 GET_SYNC_INFO ioctl p1=%02x p2=%02x p3=%02x\n", creq.p1, creq.p2, creq.unused);
+ 		if ((creq.p1 & 0xff07) == 0x2701) {
+ 			cnt++;
+ 			if (cnt == 3)
+@@ -2035,11 +2021,11 @@ char *argv[];
+ 	};
+ 
+ 	if (cnt != 3) {
+-		fprintf(stdout,"L1 ts0 sync state not reached\n");
++		fprintf(stdout, "L1 ts0 sync state not reached\n");
+ 		close(log_socket);
+ 		exit(1);
+ 	} else
+-		fprintf(stdout,"L1 ts0 sync state reached (need %d iterations)\n", i);
++		fprintf(stdout, "L1 ts0 sync state reached (need %d iterations)\n", i);
+ 
+ 	/* reenable receive */
+ 	creq.op = MISDN_CTRL_RX_OFF;
+@@ -2054,18 +2040,18 @@ char *argv[];
+ 		exit(1);
+ 	}
+ 	if (debuglevel)
+-		fprintf(stdout,"RX_OFF  ioctl p1=%02x p2=%02x p3=%02x\n", creq.p1, creq.p2, creq.unused);
++		fprintf(stdout, "RX_OFF  ioctl p1=%02x p2=%02x p3=%02x\n", creq.p1, creq.p2, creq.unused);
+ 
+ 	creq.op = MISDN_CTRL_L1_TS0_MODE;
+ 	creq.channel = 0;
+-	creq.p1 = 0x01; /* R_RX_SL0_CFG0 = (V_NO_INSYNC)  */
+-	creq.p2 = 0x03; /* R_TX_SL0_CFG1 = (V_TX_MF | V_TRP_SL0) */
++	creq.p1 = 0x01;		/* R_RX_SL0_CFG0 = (V_NO_INSYNC)  */
++	creq.p2 = 0x03;		/* R_TX_SL0_CFG1 = (V_TX_MF | V_TRP_SL0) */
+ 	creq.unused = 0;
+ 	if (debuglevel)
+-		fprintf(stdout,"L1 TS0  ioctl R_RX_SL0_CFG0=%02x R_TX_SL0_CFG1=%02x\n", creq.p1, creq.p2);
++		fprintf(stdout, "L1 TS0  ioctl R_RX_SL0_CFG0=%02x R_TX_SL0_CFG1=%02x\n", creq.p1, creq.p2);
+ 	result = ioctl(log_socket, IMCTRLREQ, &creq);
+ 	if (debuglevel)
+-		fprintf(stdout,"L1 TS0  ioctl old register values R_RX_SL0_CFG0=%02x R_TX_SL0_CFG1=%02x\n", creq.p1, creq.p2);
++		fprintf(stdout, "L1 TS0  ioctl old register values R_RX_SL0_CFG0=%02x R_TX_SL0_CFG1=%02x\n", creq.p1, creq.p2);
+ 	if (result < 0) {
+ 		fprintf(stdout, "Error on MISDN_CTRL_L1_TS0_MODE ioctl - %s\n", strerror(errno));
+ 		close(log_socket);
+@@ -2084,7 +2070,7 @@ char *argv[];
+ 		}
+ 		if (pfd[0].revents) {
+ 			dlen = receive_ts0dch(log_socket);
+-			if (dlen < 1) /* end of data */
++			if (dlen < 1)	/* end of data */
+ 				break;
+ 		}
+ 	}
+diff --git a/tools/cleanl2.c b/tools/cleanl2.c
+index db8efb9..c9ee50b 100644
+--- a/tools/cleanl2.c
++++ b/tools/cleanl2.c
+@@ -1,5 +1,6 @@
+ /*
+  *
++ * Copyright 2015 Karsten Keil <keil@b1-systems.de>
+  * Copyright 2008 Karsten Keil <kkeil@suse.de>
+  *
+  * This program is free software; you can redistribute it and/or modify it
+@@ -38,63 +39,61 @@
+ #include <mISDN/mISDNif.h>
+ #include <mISDN/af_isdn.h>
+ 
+-void usage(pname) 
++void usage(pname)
+ char *pname;
+ {
+-	fprintf(stderr,"Call with %s [options]\n",pname);
+-	fprintf(stderr,"\n");
+-	fprintf(stderr,"\n     Valid options are:\n");
+-	fprintf(stderr,"\n");
+-	fprintf(stderr,"  -?              Usage ; printout this information\n");
+-	fprintf(stderr,"  -c<n>           use card number n (default 1)\n"); 
+-	fprintf(stderr,"\n");
++	fprintf(stderr, "Call with %s [options]\n", pname);
++	fprintf(stderr, "\n");
++	fprintf(stderr, "\n     Valid options are:\n");
++	fprintf(stderr, "\n");
++	fprintf(stderr, "  -?              Usage ; printout this information\n");
++	fprintf(stderr, "  -c<n>           use card number n (default 1)\n");
++	fprintf(stderr, "\n");
+ }
+ 
+-
+-int
+-main(argc, argv)
++int main(argc, argv)
+ int argc;
+ char *argv[];
+ {
+-	int aidx=1;
++	int aidx = 1;
+ 	int cardnr = 0;
+ 	int sock;
+-	struct sockaddr_mISDN  addr;
++	struct sockaddr_mISDN addr;
+ 	int result;
+ 	int clean;
+ 	char sw;
+ 	u_int cnt, protocol;
+-	struct mISDN_devinfo	di;
+-
++	struct mISDN_devinfo di;
+ 
+ 	while (aidx < argc) {
+-		if (argv[aidx] && argv[aidx][0]=='-') {
+-			sw=argv[aidx][1];
++		if (argv[aidx] && argv[aidx][0] == '-') {
++			sw = argv[aidx][1];
+ 			switch (sw) {
+-				case 'c':
+-					if (argv[aidx][2]) {
+-						cardnr=atol(&argv[aidx][2]);
+-					}
+-					break;
+-				case '?' :
+-					usage(argv[0]);
+-					exit(1);
+-					break;
+-				default  : fprintf(stderr,"Unknown Switch %c\n",sw);
+-					usage(argv[0]);
+-					exit(1);
+-					break;
++			case 'c':
++				if (argv[aidx][2]) {
++					cardnr = atol(&argv[aidx][2]);
++				}
++				break;
++			case '?':
++				usage(argv[0]);
++				exit(1);
++				break;
++			default:
++				fprintf(stderr, "Unknown Switch %c\n", sw);
++				usage(argv[0]);
++				exit(1);
++				break;
+ 			}
+-		}  else {
+-			fprintf(stderr,"Undefined argument %s\n",argv[aidx]);
++		} else {
++			fprintf(stderr, "Undefined argument %s\n", argv[aidx]);
+ 			usage(argv[0]);
+ 			exit(1);
+ 		}
+ 		aidx++;
+-	} 
++	}
+ 
+ 	if (cardnr < 0) {
+-		fprintf(stderr,"card nr cannot be negative\n");
++		fprintf(stderr, "card nr cannot be negative\n");
+ 		exit(1);
+ 	}
+ 	if ((sock = socket(PF_ISDN, SOCK_RAW, 0)) < 0) {
+@@ -106,7 +105,7 @@ char *argv[];
+ 		printf("ioctl error %s\n", strerror(errno));
+ 		exit(1);
+ 	} else
+-		printf("%d controller%s found\n", cnt, (cnt==1)?"":"s");
++		printf("%d controller%s found\n", cnt, (cnt == 1) ? "" : "s");
+ 
+ 	di.id = cardnr;
+ 	result = ioctl(sock, IMGETDEVINFO, &di);
+@@ -144,8 +143,7 @@ char *argv[];
+ 	addr.channel = 0;
+ 	addr.sapi = 0;
+ 	addr.tei = 127;
+-	result = bind(sock, (struct sockaddr *) &addr,
+-		 sizeof(addr));
++	result = bind(sock, (struct sockaddr *)&addr, sizeof(addr));
+ 	printf("bind return %d\n", result);
+ 
+ 	if (result < 0) {
+diff --git a/tools/info.c b/tools/info.c
+index 0895a75..d51d53f 100644
+--- a/tools/info.c
++++ b/tools/info.c
+@@ -7,8 +7,7 @@
+ **                                                                           **
+ ** user space utility to list mISDN devices                                  **
+ **                                                                           **
+-\*****************************************************************************/ 
+-
++\*****************************************************************************/
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -32,8 +31,7 @@ int main(int argc, char *argv[])
+ 
+ 	/* open mISDN */
+ 	sock = socket(PF_ISDN, SOCK_RAW, ISDN_P_BASE);
+-	if (sock < 0)
+-	{
++	if (sock < 0) {
+ 		fprintf(stderr, "Cannot open mISDN due to %s. (Does your Kernel support socket based mISDN?)\n", strerror(errno));
+ 		exit(EXIT_FAILURE);
+ 	}
+@@ -41,82 +39,70 @@ int main(int argc, char *argv[])
+ 	/* get number of stacks */
+ 	i = 0;
+ 	ret = ioctl(sock, IMGETCOUNT, &ii);
+-	if (ret < 0)
+-	{
++	if (ret < 0) {
+ 		fprintf(stderr, "Cannot get number of mISDN devices. (ioctl IMGETCOUNT failed ret=%d)\n", ret);
+ 		goto done;
+ 	}
+ 	printf("\n");
+-	if (ii <= 0)
+-	{
++	if (ii <= 0) {
+ 		printf("Found no card. Please be sure to load card drivers.\n");
+ 		goto done;
+-	} else 
+-		printf("Found %i port%s\n", ii, (ii>1)?"s":"");
++	} else
++		printf("Found %i port%s\n", ii, (ii > 1) ? "s" : "");
+ 
+ 	/* loop the number of cards and get their info */
+-	while(ii && i <= MAX_DEVICE_ID)
+-	{
++	while (ii && i <= MAX_DEVICE_ID) {
+ 		nt = te = bri = pri = pots = s0 = 0;
+ 		useable = 0;
+ 
+ 		devinfo.id = i;
+ 		ret = ioctl(sock, IMGETDEVINFO, &devinfo);
+-		if (ret < 0)
+-		{
+-			fprintf(stderr, "error getting info for device %d: %s\n", i,strerror(errno));
++		if (ret < 0) {
++			fprintf(stderr, "error getting info for device %d: %s\n", i, strerror(errno));
+ 			goto next_dev;
+ 		}
+ 
+ 		/* output the port info */
+ 		printf("  Port %2d '%s':", i, devinfo.name);
+ 		if (strlen(devinfo.name) <= strlen(spaces))
+-			printf("%s", spaces+strlen(devinfo.name));
++			printf("%s", spaces + strlen(devinfo.name));
+ 		else
+ 			printf("\n                             ");
+ 
+-		if (devinfo.Dprotocols & (1 << ISDN_P_TE_S0))
+-		{
++		if (devinfo.Dprotocols & (1 << ISDN_P_TE_S0)) {
+ 			bri = 1;
+ 			te = 1;
+ 			s0 = 1;
+ 		}
+-		if (devinfo.Dprotocols & (1 << ISDN_P_NT_S0))
+-		{
++		if (devinfo.Dprotocols & (1 << ISDN_P_NT_S0)) {
+ 			bri = 1;
+ 			nt = 1;
+ 			s0 = 1;
+ 		}
+-		if (devinfo.Dprotocols & (1 << ISDN_P_TE_E1))
+-		{
++		if (devinfo.Dprotocols & (1 << ISDN_P_TE_E1)) {
+ 			pri = 1;
+ 			te = 1;
+ 		}
+-		if (devinfo.Dprotocols & (1 << ISDN_P_NT_E1))
+-		{
++		if (devinfo.Dprotocols & (1 << ISDN_P_NT_E1)) {
+ 			pri = 1;
+ 			nt = 1;
+ 		}
+-		if (devinfo.Dprotocols & (1 << ISDN_P_TE_UP0))
+-		{
++		if (devinfo.Dprotocols & (1 << ISDN_P_TE_UP0)) {
+ 			bri = 1;
+ 			te = 1;
+ 		}
+-		if (devinfo.Dprotocols & (1 << ISDN_P_NT_UP0))
+-		{
++		if (devinfo.Dprotocols & (1 << ISDN_P_NT_UP0)) {
+ 			bri = 1;
+ 			nt = 1;
+ 		}
+ #ifdef ISDN_P_FXS
+-		if (devinfo.Dprotocols & (1 << ISDN_P_FXS))
+-		{
++		if (devinfo.Dprotocols & (1 << ISDN_P_FXS)) {
+ 			pots = 1;
+ 			te = 1;
+ 		}
+ #endif
+ #ifdef ISDN_P_FXO
+-		if (devinfo.Dprotocols & (1 << ISDN_P_FXO))
+-		{
++		if (devinfo.Dprotocols & (1 << ISDN_P_FXO)) {
+ 			pots = 1;
+ 			nt = 1;
+ 		}
+@@ -125,14 +111,11 @@ int main(int argc, char *argv[])
+ 			useable = 1;
+ 
+ 		if (te && nt && bri)
+-			printf("TE/NT-mode BRI %s (for phone lines & phones)",
+-				(s0) ? "S/T" : "UP0");
++			printf("TE/NT-mode BRI %s (for phone lines & phones)", (s0) ? "S/T" : "UP0");
+ 		if (te && !nt && bri)
+-			printf("TE-mode    BRI %s (for phone lines)",
+-				(s0) ? "S/T" : "UP0");
++			printf("TE-mode    BRI %s (for phone lines)", (s0) ? "S/T" : "UP0");
+ 		if (nt && !te && bri)
+-			printf("NT-mode    BRI %s (for phones)",
+-				(s0) ? "S/T" : "UP0");
++			printf("NT-mode    BRI %s (for phones)", (s0) ? "S/T" : "UP0");
+ 		if (te && nt && pri)
+ 			printf("TE/NT-mode PRI E1  (for phone lines & E1 devices)");
+ 		if (te && !nt && pri)
+@@ -145,32 +128,25 @@ int main(int argc, char *argv[])
+ 			printf("FXS        POTS    (for analog lines)");
+ 		if (nt && !te && pots)
+ 			printf("FXO        POTS    (for analog phones)");
+-		if (pots)
+-		{
++		if (pots) {
+ 			useable = 0;
+ 			printf("\n -> Analog interfaces are not supported.");
+-		} else
+-		if (!useable)
+-		{
++		} else if (!useable) {
+ 			printf("unsupported interface protocol bits 0x%016x", devinfo.Dprotocols);
+ 		}
+ 		printf("\n                             %2d B-channels:", devinfo.nrbchan);
+ 		c = 0;
+ 		start_c = -1;
+-		while(c <= MISDN_MAX_CHANNEL + 1)
+-		{
+-			if (c <= MISDN_MAX_CHANNEL && test_channelmap(c, devinfo.channelmap))
+-			{
++		while (c <= MISDN_MAX_CHANNEL + 1) {
++			if (c <= MISDN_MAX_CHANNEL && test_channelmap(c, devinfo.channelmap)) {
+ 				if (start_c < 0)
+ 					start_c = c;
+-			} else
+-			{
+-				if (start_c >= 0)
+-				{
+-					if (c-1 == start_c)
++			} else {
++				if (start_c >= 0) {
++					if (c - 1 == start_c)
+ 						printf(" %d", start_c);
+ 					else
+-						printf(" %d-%d", start_c, c-1);
++						printf(" %d-%d", start_c, c - 1);
+ 					start_c = -1;
+ 				}
+ 			}
+@@ -178,36 +154,28 @@ int main(int argc, char *argv[])
+ 		}
+ 		printf("\n");
+ 		printf("                                B-protocols:");
+-		if (devinfo.Bprotocols & (1 << (ISDN_P_B_RAW & ISDN_P_B_MASK)))
+-		{
++		if (devinfo.Bprotocols & (1 << (ISDN_P_B_RAW & ISDN_P_B_MASK))) {
+ 			printf(" RAW");
+ 		}
+-		if (devinfo.Bprotocols & (1 << (ISDN_P_B_HDLC & ISDN_P_B_MASK)))
+-		{
++		if (devinfo.Bprotocols & (1 << (ISDN_P_B_HDLC & ISDN_P_B_MASK))) {
+ 			printf(" HDLC");
+ 		}
+-		if (devinfo.Bprotocols & (1 << (ISDN_P_B_X75SLP & ISDN_P_B_MASK)))
+-		{
++		if (devinfo.Bprotocols & (1 << (ISDN_P_B_X75SLP & ISDN_P_B_MASK))) {
+ 			printf(" X75slp");
+ 		}
+-		if (devinfo.Bprotocols & (1 << (ISDN_P_B_L2DTMF & ISDN_P_B_MASK)))
+-		{
++		if (devinfo.Bprotocols & (1 << (ISDN_P_B_L2DTMF & ISDN_P_B_MASK))) {
+ 			printf(" L2:DTMF");
+ 		}
+-		if (devinfo.Bprotocols & (1 << (ISDN_P_B_L2DSP & ISDN_P_B_MASK)))
+-		{
++		if (devinfo.Bprotocols & (1 << (ISDN_P_B_L2DSP & ISDN_P_B_MASK))) {
+ 			printf(" L2:DSP");
+ 		}
+-		if (devinfo.Bprotocols & (1 << (ISDN_P_B_L2DSPHDLC & ISDN_P_B_MASK)))
+-		{
++		if (devinfo.Bprotocols & (1 << (ISDN_P_B_L2DSPHDLC & ISDN_P_B_MASK))) {
+ 			printf(" L2:DSPHDLC");
+ 		}
+-		if (devinfo.Bprotocols & (1 << (ISDN_P_B_T30_FAX & ISDN_P_B_MASK)))
+-		{
++		if (devinfo.Bprotocols & (1 << (ISDN_P_B_T30_FAX & ISDN_P_B_MASK))) {
+ 			printf(" T30-Fax");
+ 		}
+-		if (devinfo.Bprotocols & (1 << (ISDN_P_B_MODEM_ASYNC & ISDN_P_B_MASK)))
+-		{
++		if (devinfo.Bprotocols & (1 << (ISDN_P_B_MODEM_ASYNC & ISDN_P_B_MASK))) {
+ 			printf(" asnc.Modem");
+ 		}
+ 		printf("\n");
+@@ -218,13 +186,12 @@ int main(int argc, char *argv[])
+ 			printf("  --------\n");
+ 		ii--;
+ 
+-	next_dev:
++next_dev:
+ 		i++;
+ 	}
+ 	printf("\n");
+ 
+ done:
+ 	close(sock);
+-	return(0);
++	return (0);
+ }
+-
+diff --git a/tools/loghex.c b/tools/loghex.c
+index 4ccd3d6..8f5e0d6 100644
+--- a/tools/loghex.c
++++ b/tools/loghex.c
+@@ -1,5 +1,6 @@
+ /*
+  *
++ * Copyright 2015 Karsten Keil <keil@b1-systems.de>
+  * Copyright 2008 Karsten Keil <kkeil@suse.de>
+  *
+  * This program is free software; you can redistribute it and/or modify it
+@@ -44,23 +45,22 @@ static int dch_echo = 0;
+ static void usage(pname)
+ char *pname;
+ {
+-	fprintf(stderr,"Call with %s [options]\n",pname);
+-	fprintf(stderr,"\n");
+-	fprintf(stderr,"\n     Valid options are:\n");
+-	fprintf(stderr,"\n");
+-	fprintf(stderr,"  -?              Usage ; printout this information\n");
+-	fprintf(stderr,"  -c<n>           use card number n (default 0)\n");
+-	fprintf(stderr,"  -e              try using echo channel for TX data\n");
+-	fprintf(stderr,"  -w <file>       write wiresharkdump <file>\n");
+-	fprintf(stderr,"\n");
++	fprintf(stderr, "Call with %s [options]\n", pname);
++	fprintf(stderr, "\n");
++	fprintf(stderr, "\n     Valid options are:\n");
++	fprintf(stderr, "\n");
++	fprintf(stderr, "  -?              Usage ; printout this information\n");
++	fprintf(stderr, "  -c<n>           use card number n (default 0)\n");
++	fprintf(stderr, "  -e              try using echo channel for TX data\n");
++	fprintf(stderr, "  -w <file>       write wiresharkdump <file>\n");
++	fprintf(stderr, "\n");
+ }
+ 
+-
+-static void write_esc (FILE *file, unsigned char *buf, int len)
++static void write_esc(FILE * file, unsigned char *buf, int len)
+ {
+-    int i, byte;
++	int i, byte;
+ 
+-    for (i = 0; i < len; ++i) {
++	for (i = 0; i < len; ++i) {
+ 		byte = buf[i];
+ 		if (byte == 0xff || byte == 0xfe) {
+ 			fputc(0xfe, file);
+@@ -75,10 +75,10 @@ static void write_esc (FILE *file, unsigned char *buf, int len)
+ 	}
+ }
+ 
+-static void write_wfile(FILE *f, unsigned char *buf, int len, struct timeval *tv, int protocol)
++static void write_wfile(FILE * f, unsigned char *buf, int len, struct timeval *tv, int protocol)
+ {
+-	struct mISDNhead	*hh = (struct mISDNhead *)buf;
+-	u_char			head[12], origin;
++	struct mISDNhead *hh = (struct mISDNhead *)buf;
++	u_char head[12], origin;
+ 
+ 	/* skip PH_DATA_REQ if PH_DATA_E_IND are expected */
+ 	if (dch_echo && (hh->prim == PH_DATA_REQ))
+@@ -87,15 +87,13 @@ static void write_wfile(FILE *f, unsigned char *buf, int len, struct timeval *tv
+ 	if (!dch_echo && (hh->prim == PH_DATA_E_IND))
+ 		return;
+ 	/* skip all none data */
+-	if ((hh->prim != PH_DATA_REQ) && (hh->prim != PH_DATA_IND) &&
+-		    (hh->prim != PH_DATA_E_IND))
++	if ((hh->prim != PH_DATA_REQ) && (hh->prim != PH_DATA_IND) && (hh->prim != PH_DATA_E_IND))
+ 		return;
+ 
+ 	if (protocol == ISDN_P_NT_S0 || protocol == ISDN_P_NT_E1)
+ 		origin = hh->prim == PH_DATA_REQ ? 0 : 1;
+ 	else
+-		origin = ((hh->prim == PH_DATA_REQ) ||
+-				(hh->prim == PH_DATA_E_IND)) ? 1 : 0;
++		origin = ((hh->prim == PH_DATA_REQ) || (hh->prim == PH_DATA_E_IND)) ? 1 : 0;
+ 
+ 	len -= MISDN_HEADER_LEN;
+ 
+@@ -109,26 +107,25 @@ static void write_wfile(FILE *f, unsigned char *buf, int len, struct timeval *tv
+ 	head[5] = (unsigned char)(0xff & (tv->tv_sec >> 16));
+ 	head[6] = (unsigned char)(0xff & (tv->tv_sec >> 8));
+ 	head[7] = (unsigned char)(0xff & tv->tv_sec);
+-	head[8] = (unsigned char) 0;
+-	head[9] = (unsigned char) origin;
+-	head[10]= (unsigned char)(0xff & (len >> 8));
+-	head[11]= (unsigned char)(0xff & len);
++	head[8] = (unsigned char)0;
++	head[9] = (unsigned char)origin;
++	head[10] = (unsigned char)(0xff & (len >> 8));
++	head[11] = (unsigned char)(0xff & len);
+ 
+ 	write_esc(f, head, 12);
+ 	write_esc(f, &buf[MISDN_HEADER_LEN], len);
+ 	fflush(f);
+ }
+ 
+-
+ static void printhex(unsigned char *p, int len, int head)
+ {
+-	int	i,j;
++	int i, j;
+ 
+ 	for (i = 1; i <= len; i++) {
+ 		printf(" %02x", *p++);
+-		if ((i!=len) && !(i % 4) && (i % 16))
++		if ((i != len) && !(i % 4) && (i % 16))
+ 			printf(" ");
+-		if ((i!=len) && !(i % 16)) {
++		if ((i != len) && !(i % 16)) {
+ 			printf("\n");
+ 			for (j = 0; j < head; j++)
+ 				printf(" ");
+@@ -138,81 +135,81 @@ static void printhex(unsigned char *p, int len, int head)
+ }
+ 
+ struct ctstamp {
+-	size_t		cmsg_len;
+-	int		cmsg_level;
+-	int		cmsg_type;
+-	struct timeval	tv;
++	size_t cmsg_len;
++	int cmsg_level;
++	int cmsg_type;
++	struct timeval tv;
+ };
+ 
+-int
+-main(argc, argv)
++int main(argc, argv)
+ int argc;
+ char *argv[];
+ {
+-	int	aidx=1, idx, i, channel;
+-	int	cardnr = 0;
+-	int	log_socket;
+-	struct sockaddr_mISDN  log_addr;
+-	int	buflen = 512;
+-	char	sw;
+-	char	wfilename[512];
+-	int	head = 0;
+-	char	*pn, pns[32];
+-	u_char	buffer[buflen];
+-	struct msghdr	mh;
+-	struct iovec	iov[1];
+-	struct ctstamp	cts;
+-	struct tm	*mt;
+-	int	result;
+-	int	opt;
+-	u_int	cnt;
+-	struct mISDN_devinfo	di;
+-	struct mISDNhead 	*hh;
+-	struct mISDNversion	ver;
+-	FILE	*wfile = NULL;
++	int aidx = 1, idx, i, channel;
++	int cardnr = 0;
++	int log_socket;
++	struct sockaddr_mISDN log_addr;
++	int buflen = 512;
++	char sw;
++	char wfilename[512];
++	int head = 0;
++	char *pn, pns[32];
++	u_char buffer[buflen];
++	struct msghdr mh;
++	struct iovec iov[1];
++	struct ctstamp cts;
++	struct tm *mt;
++	int result;
++	int opt;
++	u_int cnt;
++	struct mISDN_devinfo di;
++	struct mISDNhead *hh;
++	struct mISDNversion ver;
++	FILE *wfile = NULL;
+ 
+ 	*wfilename = 0;
+ 	while (aidx < argc) {
+-		if (argv[aidx] && argv[aidx][0]=='-') {
+-			sw=argv[aidx][1];
++		if (argv[aidx] && argv[aidx][0] == '-') {
++			sw = argv[aidx][1];
+ 			switch (sw) {
+-				case 'c':
+-					if (argv[aidx][2]) {
+-						cardnr=atol(&argv[aidx][2]);
+-					}
+-					break;
+-				case 'w':
+-					if (!argv[aidx][2]) {
+-						idx = 0;
+-						aidx++;
+-					} else {
+-						idx=2;
+-					}
+-					if (aidx<=argc) {
+-						if (512 <= strlen(&argv[aidx][idx])) {
+-							fprintf(stderr," -w filename too long\n");
+-							exit(1);
+-						}
+-						strcpy(wfilename, &argv[aidx][idx]);
+-					} else {
+-						fprintf(stderr," Switch %c without value\n",sw);
++			case 'c':
++				if (argv[aidx][2]) {
++					cardnr = atol(&argv[aidx][2]);
++				}
++				break;
++			case 'w':
++				if (!argv[aidx][2]) {
++					idx = 0;
++					aidx++;
++				} else {
++					idx = 2;
++				}
++				if (aidx <= argc) {
++					if (512 <= strlen(&argv[aidx][idx])) {
++						fprintf(stderr, " -w filename too long\n");
+ 						exit(1);
+ 					}
+-					break;
+-				case 'e':
+-					dch_echo = 1;
+-					break;
+-				case '?' :
+-					usage(argv[0]);
++					strcpy(wfilename, &argv[aidx][idx]);
++				} else {
++					fprintf(stderr, " Switch %c without value\n", sw);
+ 					exit(1);
+-					break;
+-				default  : fprintf(stderr,"Unknown Switch %c\n",sw);
+-					usage(argv[0]);
+-					exit(1);
+-					break;
++				}
++				break;
++			case 'e':
++				dch_echo = 1;
++				break;
++			case '?':
++				usage(argv[0]);
++				exit(1);
++				break;
++			default:
++				fprintf(stderr, "Unknown Switch %c\n", sw);
++				usage(argv[0]);
++				exit(1);
++				break;
+ 			}
+-		}  else {
+-			fprintf(stderr,"Undefined argument %s\n",argv[aidx]);
++		} else {
++			fprintf(stderr, "Undefined argument %s\n", argv[aidx]);
+ 			usage(argv[0]);
+ 			exit(1);
+ 		}
+@@ -220,7 +217,7 @@ char *argv[];
+ 	}
+ 
+ 	if (cardnr < 0) {
+-		fprintf(stderr,"card nr may not be negative\n");
++		fprintf(stderr, "card nr may not be negative\n");
+ 		exit(1);
+ 	}
+ 
+@@ -235,7 +232,8 @@ char *argv[];
+ 		exit(1);
+ 	}
+ 	if (ver.release & MISDN_GIT_RELEASE)
+-		printf("mISDN kernel version %d.%02d.%d (git.misdn.eu) found\n", ver.major, ver.minor, ver.release & ~MISDN_GIT_RELEASE);
++		printf("mISDN kernel version %d.%02d.%d (git.misdn.eu) found\n", ver.major, ver.minor,
++		       ver.release & ~MISDN_GIT_RELEASE);
+ 	else
+ 		printf("mISDN kernel version %d.%02d.%d found\n", ver.major, ver.minor, ver.release);
+ 
+@@ -251,7 +249,7 @@ char *argv[];
+ 		printf("ioctl error %s\n", strerror(errno));
+ 		exit(1);
+ 	} else
+-		printf("%d controller%s found\n", cnt, (cnt==1)?"":"s");
++		printf("%d controller%s found\n", cnt, (cnt == 1) ? "" : "s");
+ 
+ 	di.id = cardnr;
+ 	result = ioctl(log_socket, IMGETDEVINFO, &di);
+@@ -272,7 +270,7 @@ char *argv[];
+ 
+ 	close(log_socket);
+ 
+-	if (di.protocol == ISDN_P_NONE) /* default TE */
++	if (di.protocol == ISDN_P_NONE)	/* default TE */
+ 		di.protocol = ISDN_P_TE_S0;
+ 
+ 	if ((log_socket = socket(PF_ISDN, SOCK_DGRAM, di.protocol)) < 0) {
+@@ -289,8 +287,7 @@ char *argv[];
+ 
+ 	while ((result < 0) && (channel >= 0)) {
+ 		log_addr.channel = (unsigned char)channel;
+-		result = bind(log_socket, (struct sockaddr *) &log_addr,
+-			sizeof(log_addr));
++		result = bind(log_socket, (struct sockaddr *)&log_addr, sizeof(log_addr));
+ 		printf("log bind ch(%i) return %d\n", log_addr.channel, result);
+ 		if (result < 0) {
+ 			printf("log bind error %s\n", strerror(errno));
+@@ -345,75 +342,76 @@ char *argv[];
+ 				printf("received message with msg_flags(%x)\n", mh.msg_flags);
+ 			}
+ 			if (cts.cmsg_type == MISDN_TIME_STAMP) {
+-				mt = localtime((time_t *)&cts.tv.tv_sec);
+-				head = printf("%02d.%02d.%04d %02d:%02d:%02d.%06ld", mt->tm_mday, mt->tm_mon + 1, mt->tm_year + 1900,
+-					mt->tm_hour, mt->tm_min, mt->tm_sec, cts.tv.tv_usec);
++				mt = localtime((time_t *) & cts.tv.tv_sec);
++				head =
++				    printf("%02d.%02d.%04d %02d:%02d:%02d.%06ld", mt->tm_mday, mt->tm_mon + 1, mt->tm_year + 1900,
++					   mt->tm_hour, mt->tm_min, mt->tm_sec, cts.tv.tv_usec);
+ 			} else {
+ 				cts.tv.tv_sec = 0;
+ 				cts.tv.tv_usec = 0;
+ 			}
+ 			switch (hh->prim) {
+-				case PH_DATA_E_IND:
+-					pn = "ECHO IND";
+-					break;
+-				case PH_DATA_IND:
+-					pn = "DATA IND";
+-					break;
+-				case PH_DATA_REQ:
+-					pn = "DATA REQ";
+-					break;
+-				case PH_DATA_CNF:
+-					pn = "DATA CNF";
+-					break;
+-				case PH_ACTIVATE_IND:
+-					pn = "ACTIVATE IND";
+-					break;
+-				case PH_ACTIVATE_REQ:
+-					pn = "ACTIVATE REQ";
+-					break;
+-				case PH_ACTIVATE_CNF:
+-					pn = "ACTIVATE CNF";
+-					break;
+-				case PH_DEACTIVATE_IND:
+-					pn = "DEACTIVATE IND";
+-					break;
+-				case PH_DEACTIVATE_REQ:
+-					pn = "DEACTIVATE REQ";
+-					break;
+-				case PH_DEACTIVATE_CNF:
+-					pn = "DEACTIVATE CNF";
+-					break;
+-				case MPH_ACTIVATE_IND:
+-					pn = "MPH ACTIVATE IND";
+-					break;
+-				case MPH_ACTIVATE_REQ:
+-					pn = "MPH ACTIVATE REQ";
+-					break;
+-				case MPH_INFORMATION_REQ:
+-					pn = "MPH INFORMATION REQ";
+-					break;
+-				case MPH_DEACTIVATE_IND:
+-					pn = "MPH DEACTIVATE IND";
+-					break;
+-				case MPH_DEACTIVATE_REQ:
+-					pn = "MPH DEACTIVATE REQ";
+-					break;
+-				case MPH_INFORMATION_IND:
+-					pn = "MPH INFORMATION IND";
+-					break;
+-				case PH_CONTROL_REQ:
+-					pn = "PH CONTROL REQ";
+-					break;
+-				case PH_CONTROL_IND:
+-					pn = "PH CONTROL IND";
+-					break;
+-				case PH_CONTROL_CNF:
+-					pn = "PH CONTROL CNF";
+-					break;
+-				default:
+-					sprintf(pns,"Unknown %04x", hh->prim);
+-					pn = pns;
+-					break;
++			case PH_DATA_E_IND:
++				pn = "ECHO IND";
++				break;
++			case PH_DATA_IND:
++				pn = "DATA IND";
++				break;
++			case PH_DATA_REQ:
++				pn = "DATA REQ";
++				break;
++			case PH_DATA_CNF:
++				pn = "DATA CNF";
++				break;
++			case PH_ACTIVATE_IND:
++				pn = "ACTIVATE IND";
++				break;
++			case PH_ACTIVATE_REQ:
++				pn = "ACTIVATE REQ";
++				break;
++			case PH_ACTIVATE_CNF:
++				pn = "ACTIVATE CNF";
++				break;
++			case PH_DEACTIVATE_IND:
++				pn = "DEACTIVATE IND";
++				break;
++			case PH_DEACTIVATE_REQ:
++				pn = "DEACTIVATE REQ";
++				break;
++			case PH_DEACTIVATE_CNF:
++				pn = "DEACTIVATE CNF";
++				break;
++			case MPH_ACTIVATE_IND:
++				pn = "MPH ACTIVATE IND";
++				break;
++			case MPH_ACTIVATE_REQ:
++				pn = "MPH ACTIVATE REQ";
++				break;
++			case MPH_INFORMATION_REQ:
++				pn = "MPH INFORMATION REQ";
++				break;
++			case MPH_DEACTIVATE_IND:
++				pn = "MPH DEACTIVATE IND";
++				break;
++			case MPH_DEACTIVATE_REQ:
++				pn = "MPH DEACTIVATE REQ";
++				break;
++			case MPH_INFORMATION_IND:
++				pn = "MPH INFORMATION IND";
++				break;
++			case PH_CONTROL_REQ:
++				pn = "PH CONTROL REQ";
++				break;
++			case PH_CONTROL_IND:
++				pn = "PH CONTROL IND";
++				break;
++			case PH_CONTROL_CNF:
++				pn = "PH CONTROL CNF";
++				break;
++			default:
++				sprintf(pns, "Unknown %04x", hh->prim);
++				pn = pns;
++				break;
+ 			}
+ 			head += printf(" %s id=%08x", pn, hh->id);
+ 			if (wfile && (result > MISDN_HEADER_LEN))
+diff --git a/tools/rename.c b/tools/rename.c
+index 732227f..3748289 100644
+--- a/tools/rename.c
++++ b/tools/rename.c
+@@ -8,8 +8,7 @@
+ **                                                                           **
+ ** user space utility to rename a mISDN device                               **
+ **                                                                           **
+-\*****************************************************************************/ 
+-
++\*****************************************************************************/
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -31,19 +30,17 @@ int main(int argc, char *argv[])
+ 	int sock;
+ 
+ 	if (argc != 3) {
+-		fprintf(stderr,"Usage: %s <old name or ID> <new name>\n",
+-		        argv[0]);
++		fprintf(stderr, "Usage: %s <old name or ID> <new name>\n", argv[0]);
+ 		exit(2);
+ 	}
+-	if (! argv[2][0] || strlen(argv[2]) >= MISDN_MAX_IDLEN) {
+-		fprintf(stderr,"New device name: must be at most %d bytes long.\n",MISDN_MAX_IDLEN-1);
++	if (!argv[2][0] || strlen(argv[2]) >= MISDN_MAX_IDLEN) {
++		fprintf(stderr, "New device name: must be at most %d bytes long.\n", MISDN_MAX_IDLEN - 1);
+ 		exit(2);
+ 	}
+ 
+ 	/* open mISDN */
+ 	sock = socket(PF_ISDN, SOCK_RAW, ISDN_P_BASE);
+-	if (sock < 0)
+-	{
++	if (sock < 0) {
+ 		fprintf(stderr, "Cannot open mISDN due to %s. (Does your Kernel support socket based mISDN?)\n", strerror(errno));
+ 		exit(EXIT_FAILURE);
+ 	}
+@@ -51,8 +48,7 @@ int main(int argc, char *argv[])
+ 	/* get number of stacks */
+ 	i = 1;
+ 	ret = ioctl(sock, IMGETCOUNT, &ii);
+-	if (ret < 0)
+-	{
++	if (ret < 0) {
+ 		fprintf(stderr, "Cannot get number of mISDN devices: %s\n", strerror(errno));
+ 		goto done;
+ 	}
+@@ -61,49 +57,45 @@ int main(int argc, char *argv[])
+ 		goto done;
+ 	}
+ 
+-	if(isdigit(argv[1][0])) {
++	if (isdigit(argv[1][0])) {
+ 		i = atoi(argv[1]);
+ 		if (i < 0) {
+-			fprintf(stderr,"Interface number must be >= zero.\n");
++			fprintf(stderr, "Interface number must be >= zero.\n");
+ 			exit(1);
+ 		}
+ 	} else {
+-		if (! argv[1][0] || strlen(argv[1]) >= MISDN_MAX_IDLEN) {
+-			fprintf(stderr,"Old device name: may be at most %d bytes long.\n",MISDN_MAX_IDLEN-1);
++		if (!argv[1][0] || strlen(argv[1]) >= MISDN_MAX_IDLEN) {
++			fprintf(stderr, "Old device name: may be at most %d bytes long.\n", MISDN_MAX_IDLEN - 1);
+ 			exit(2);
+ 		}
+ 
+ 		i = 0;
+-		while(ii && i <= MAX_DEVICE_ID)
+-		{
++		while (ii && i <= MAX_DEVICE_ID) {
+ 			devinfo.id = i;
+ 			ret = ioctl(sock, IMGETDEVINFO, &devinfo);
+-			if (ret < 0)
+-			{
+-				fprintf(stderr, "error getting info for device %d: %s\n", i,strerror(errno));
++			if (ret < 0) {
++				fprintf(stderr, "error getting info for device %d: %s\n", i, strerror(errno));
+ 				goto next_dev;
+ 			}
+-			if (!strcmp (argv[1], devinfo.name))
++			if (!strcmp(argv[1], devinfo.name))
+ 				goto found_dev;
+ 			--ii;
+-		next_dev:
++next_dev:
+ 			i++;
+ 		}
+-		fprintf(stderr,"Interface not found.\n");
++		fprintf(stderr, "Interface not found.\n");
+ 		goto done;
+ 	}
+ found_dev:
+ 	devname.id = i;
+-	strncpy(devname.name,argv[2],MISDN_MAX_IDLEN);
++	strncpy(devname.name, argv[2], MISDN_MAX_IDLEN);
+ 	ret = ioctl(sock, IMSETDEVNAME, &devname);
+-	if (ret < 0)
+-	{
++	if (ret < 0) {
+ 		fprintf(stderr, "Cannot set device name for port %d: %s\n", i, strerror(errno));
+ 		exit(1);
+ 	}
+ 
+ done:
+ 	close(sock);
+-	return(0);
++	return (0);
+ }
+-
+diff --git a/tools/text_wireshark.c b/tools/text_wireshark.c
+index 4a0772f..f8b938b 100644
+--- a/tools/text_wireshark.c
++++ b/tools/text_wireshark.c
+@@ -1,5 +1,6 @@
+ /*
+  *
++ * Copyright 2015 Karsten Keil <keil@b1-systems.de>
+  * Copyright 2012 Karsten Keil <kkeil@suse.de>
+  *
+  * This program is free software; you can redistribute it and/or modify it
+@@ -21,7 +22,6 @@
+  *
+  */
+ 
+-
+ /*
+  * This tool is not specific to mISDN it does read a D-channel trace from a hex/text
+  * file into binary wireshark format
+@@ -31,8 +31,7 @@
+  * > FCFF030F01FF01FF     05.06. 13:23:33
+  * < FEFF030F01FF0285     05.06. 13:23:33
+  *
+- */ 
+-
++ */
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -47,24 +46,22 @@
+ #include <malloc.h>
+ #include <time.h>
+ 
+-
+ static void usage(pname)
+ char *pname;
+ {
+-	fprintf(stderr,"\n\nCall with %s [options] <infile> <outfile>\n",pname);
+-	fprintf(stderr,"\n");
+-	fprintf(stderr,"\n     Valid options are:\n");
+-	fprintf(stderr,"\n");
+-	fprintf(stderr,"  -?              Usage ; printout this information\n");
+-	fprintf(stderr,"\n");
++	fprintf(stderr, "\n\nCall with %s [options] <infile> <outfile>\n", pname);
++	fprintf(stderr, "\n");
++	fprintf(stderr, "\n     Valid options are:\n");
++	fprintf(stderr, "\n");
++	fprintf(stderr, "  -?              Usage ; printout this information\n");
++	fprintf(stderr, "\n");
+ }
+ 
+-
+-static void write_esc (FILE *file, unsigned char *buf, int len)
++static void write_esc(FILE * file, unsigned char *buf, int len)
+ {
+-    int i, byte;
++	int i, byte;
+ 
+-    for (i = 0; i < len; ++i) {
++	for (i = 0; i < len; ++i) {
+ 		byte = buf[i];
+ 		if (byte == 0xff || byte == 0xfe) {
+ 			fputc(0xfe, file);
+@@ -79,9 +76,9 @@ static void write_esc (FILE *file, unsigned char *buf, int len)
+ 	}
+ }
+ 
+-static void write_wfile(FILE *f, unsigned char *buf, int len, struct timeval *tv, int origin)
++static void write_wfile(FILE * f, unsigned char *buf, int len, struct timeval *tv, int origin)
+ {
+-	u_char			head[12];
++	u_char head[12];
+ 
+ 	fputc(0xff, f);
+ 	head[0] = (unsigned char)(0xff & (tv->tv_usec >> 16));
+@@ -92,17 +89,18 @@ static void write_wfile(FILE *f, unsigned char *buf, int len, struct timeval *tv
+ 	head[5] = (unsigned char)(0xff & (tv->tv_sec >> 16));
+ 	head[6] = (unsigned char)(0xff & (tv->tv_sec >> 8));
+ 	head[7] = (unsigned char)(0xff & tv->tv_sec);
+-	head[8] = (unsigned char) 0;
+-	head[9] = (unsigned char) origin & 0xff;
+-	head[10]= (unsigned char)(0xff & (len >> 8));
+-	head[11]= (unsigned char)(0xff & len);
++	head[8] = (unsigned char)0;
++	head[9] = (unsigned char)origin & 0xff;
++	head[10] = (unsigned char)(0xff & (len >> 8));
++	head[11] = (unsigned char)(0xff & len);
+ 
+ 	write_esc(f, head, 12);
+ 	write_esc(f, buf, len);
+ 	fflush(f);
+ }
+ 
+-static char *skip_space(char *buf) {
++static char *skip_space(char *buf)
++{
+ 	while (*buf) {
+ 		switch (*buf) {
+ 		case ' ':
+@@ -132,7 +130,7 @@ static int getvalue(char *p)
+ 	return v;
+ }
+ 
+-static int analyse_line(char *line, u_char *buf, int *org, struct tm *tm)
++static int analyse_line(char *line, u_char * buf, int *org, struct tm *tm)
+ {
+ 	char *p = line;
+ 	int len = 0, val;
+@@ -148,7 +146,7 @@ static int analyse_line(char *line, u_char *buf, int *org, struct tm *tm)
+ 	p = skip_space(p);
+ 	if (*p == 0)
+ 		return len;
+-	while(*p) {
++	while (*p) {
+ 		if (isspace(*p))
+ 			break;
+ 		val = getvalue(p);
+@@ -173,41 +171,40 @@ static void normalize_tv(struct timeval *tv)
+ 	}
+ }
+ 
+-int
+-main(argc, argv)
++int main(argc, argv)
+ int argc;
+ char *argv[];
+ {
+-	char	*infilename = NULL;
+-	char	*outfilename = NULL;
++	char *infilename = NULL;
++	char *outfilename = NULL;
+ 	char sw;
+-	char	line[4096];
+-	u_char  buffer[512];
++	char line[4096];
++	u_char buffer[512];
+ 	struct timeval main_tv, cur_tv;
+ 	struct tm main_tm, cur_tm;
+ 	time_t sec, last_sec;
+ 	suseconds_t usec;
+-	int	len, org, aidx = 1;
+-	int	param = 0;
+-	FILE	*ifile, *ofile;
++	int len, org, aidx = 1;
++	int param = 0;
++	FILE *ifile, *ofile;
+ 
+ 	while (aidx < argc) {
+-		if (argv[aidx] && argv[aidx][0]=='-') {
+-			sw=argv[aidx][1];
++		if (argv[aidx] && argv[aidx][0] == '-') {
++			sw = argv[aidx][1];
+ 			switch (sw) {
+ 			case '?':
+ 				usage(argv[0]);
+ 				exit(1);
+ 				break;
+ 			default:
+-				fprintf(stderr,"Unknown Switch %c\n",sw);
++				fprintf(stderr, "Unknown Switch %c\n", sw);
+ 				usage(argv[0]);
+ 				exit(1);
+ 				break;
+ 			}
+-		}  else {
++		} else {
+ 			if (strlen(argv[aidx]) >= 512) {
+-				fprintf(stderr,"%s filename too long\n", param ? "out" : "in");
++				fprintf(stderr, "%s filename too long\n", param ? "out" : "in");
+ 				exit(1);
+ 			}
+ 			if (param == 0) {
+@@ -215,7 +212,7 @@ char *argv[];
+ 			} else if (param == 1) {
+ 				outfilename = argv[aidx];
+ 			} else {
+-				fprintf(stderr,"Too many parameter (%d)  item (%s)\n", argc - 1,  argv[aidx]);
++				fprintf(stderr, "Too many parameter (%d)  item (%s)\n", argc - 1, argv[aidx]);
+ 				usage(argv[0]);
+ 				exit(1);
+ 			}
+@@ -225,22 +222,22 @@ char *argv[];
+ 	}
+ 
+ 	if (param < 2) {
+-		fprintf(stderr,"Only %d parameter given but need <infile> and <outfile>\n", param);
++		fprintf(stderr, "Only %d parameter given but need <infile> and <outfile>\n", param);
+ 		exit(1);
+ 	}
+ 
+ 	ifile = fopen(infilename, "rt");
+ 	if (!ifile) {
+-		fprintf(stderr,"cannot open %s for input - %s\n", infilename, strerror(errno));
++		fprintf(stderr, "cannot open %s for input - %s\n", infilename, strerror(errno));
+ 		exit(1);
+-	} 
++	}
+ 
+ 	ofile = fopen(outfilename, "w");
+ 	if (!ofile) {
+-		fprintf(stderr,"cannot open %s for output - %s\n", outfilename, strerror(errno));
++		fprintf(stderr, "cannot open %s for output - %s\n", outfilename, strerror(errno));
+ 		fclose(ifile);
+ 		exit(1);
+-	} 
++	}
+ 	fprintf(ofile, "EyeSDN");
+ 	fflush(ofile);
+ 
+@@ -251,7 +248,7 @@ char *argv[];
+ 	usec = 0;
+ 	while (1) {
+ 		if (!fgets(line, 4096, ifile)) {
+-			fprintf(stderr,"EOF or error reading file %s\n", infilename);
++			fprintf(stderr, "EOF or error reading file %s\n", infilename);
+ 			break;
+ 		}
+ 		org = 0;
