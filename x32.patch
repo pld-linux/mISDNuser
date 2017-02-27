@@ -1,0 +1,14 @@
+--- mISDNuser-2.0.19/tools/loghex.c~	2017-02-27 20:51:45.000000000 +0100
++++ mISDNuser-2.0.19/tools/loghex.c	2017-02-27 20:52:17.457179734 +0100
+@@ -344,7 +344,11 @@
+ 			if (cts.cmsg_type == MISDN_TIME_STAMP) {
+ 				mt = localtime((time_t *) & cts.tv.tv_sec);
+ 				head =
++#ifdef __ILP32__
++				    printf("%02d.%02d.%04d %02d:%02d:%02d.%06lld", mt->tm_mday, mt->tm_mon + 1, mt->tm_year + 1900,
++#else
+ 				    printf("%02d.%02d.%04d %02d:%02d:%02d.%06ld", mt->tm_mday, mt->tm_mon + 1, mt->tm_year + 1900,
++#endif
+ 					   mt->tm_hour, mt->tm_min, mt->tm_sec, cts.tv.tv_usec);
+ 			} else {
+ 				cts.tv.tv_sec = 0;

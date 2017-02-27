@@ -16,6 +16,7 @@ Group:		Libraries
 Source0:	%{name}-%{version}.tar.xz
 # Source0-md5:	fb4bf6c110bea0a30486015ca56e80d8
 Patch0:		git.patch
+Patch1:		x32.patch
 URL:		http://www.isdn4linux.de/mISDN/
 BuildRequires:	autoconf >= 2.63
 BuildRequires:	automake
@@ -114,7 +115,8 @@ Aplikacja z graficznym interfejsem użytkownika do mISDN.
 
 %prep
 %setup -q
-#%patch0 -p1
+%patch0 -p1
+%patch1 -p1
 
 %build
 %{__libtoolize}
@@ -132,6 +134,7 @@ Aplikacja z graficznym interfejsem użytkownika do mISDN.
 
 %install
 rm -rf $RPM_BUILD_ROOT
+install -d $RPM_BUILD_ROOT/var/run/mISDNcapid
 
 %{__make} install \
 	DESTDIR=$RPM_BUILD_ROOT
