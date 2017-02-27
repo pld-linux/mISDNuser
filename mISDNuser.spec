@@ -8,7 +8,7 @@ Summary:	Userspace part of Modular ISDN stack
 Summary(pl.UTF-8):	Część stosu modularnego ISDN (mISDN) dla przestrzeni użytkownika
 Name:		mISDNuser
 Version:	2.0.19
-Release:	1
+Release:	2
 License:	LGPL v2.1
 Group:		Libraries
 # git clone git://git.misdn.eu/mISDNuser.git
