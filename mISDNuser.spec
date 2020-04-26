@@ -8,7 +8,7 @@ Summary:	Userspace part of Modular ISDN stack
 Summary(pl.UTF-8):	Część stosu modularnego ISDN (mISDN) dla przestrzeni użytkownika
 Name:		mISDNuser
 Version:	2.0.19
-Release:	2
+Release:	3
 License:	LGPL v2.1
 Group:		Libraries
 # git clone git://git.misdn.eu/mISDNuser.git
@@ -17,6 +17,8 @@ Source0:	%{name}-%{version}.tar.xz
 # Source0-md5:	fb4bf6c110bea0a30486015ca56e80d8
 Patch0:		git.patch
 Patch1:		x32.patch
+Patch2:		const-const.patch
+Patch3:		array-bounds.patch
 URL:		http://www.isdn4linux.de/mISDN/
 BuildRequires:	autoconf >= 2.63
 BuildRequires:	automake
@@ -117,8 +119,11 @@ Aplikacja z graficznym interfejsem użytkownika do mISDN.
 %setup -q
 %patch0 -p1
 %patch1 -p1
+%patch2 -p1
+%patch3 -p1
 
 %build
+export CFLAGS="%{rpmcflags} -Wno-stringop-truncation"
 %{__libtoolize}
 %{__aclocal}
 %{__autoconf}
@@ -134,7 +139,6 @@ Aplikacja z graficznym interfejsem użytkownika do mISDN.
 
 %install
 rm -rf $RPM_BUILD_ROOT
-install -d $RPM_BUILD_ROOT/var/run/mISDNcapid
 
 %{__make} install \
 	DESTDIR=$RPM_BUILD_ROOT
@@ -143,15 +147,16 @@ install -d $RPM_BUILD_ROOT/var/run/mISDNcapid
 %{__rm} $RPM_BUILD_ROOT%{_libdir}/capi/lib*.la
 # sample
 %{__rm} $RPM_BUILD_ROOT%{_sysconfdir}/capi20.conf
-%endif
 
-install -d $RPM_BUILD_ROOT/lib
-%{__mv} $RPM_BUILD_ROOT%{_sysconfdir}/udev $RPM_BUILD_ROOT/lib
-
+install -d $RPM_BUILD_ROOT/var/run/mISDNcapid
 install -d $RPM_BUILD_ROOT%{systemdtmpfilesdir}
 cat >$RPM_BUILD_ROOT%{systemdtmpfilesdir}/mISDNcapid.conf <<EOF
 d /var/run/mISDNcapid 755 root root -
 EOF
+%endif
+
+install -d $RPM_BUILD_ROOT/lib
+%{__mv} $RPM_BUILD_ROOT%{_sysconfdir}/udev $RPM_BUILD_ROOT/lib
 
 %clean
 rm -rf $RPM_BUILD_ROOT

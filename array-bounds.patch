@@ -1,0 +1,31 @@
+--- mISDNuser-2.0.19/lib/layer3/q931.c~	2014-10-20 14:18:55.000000000 +0200
++++ mISDNuser-2.0.19/lib/layer3/q931.c	2020-04-26 17:16:23.169108417 +0200
+@@ -506,7 +506,7 @@
+ int
+ mi_encode_redirecting_nr(struct l3_msg *l3m, char *nr, int pres, unsigned int type, unsigned int plan, int reason)
+ {
+-	unsigned char ie[24];
++	unsigned char ie[32];
+ 	int l;
+ 
+ 	if (nr == NULL || *nr == 0) /* not provided */
+@@ -537,7 +537,7 @@
+ int
+ mi_encode_redirection_nr(struct l3_msg *l3m, char *nr, int pres, unsigned int type, unsigned int plan)
+ {
+-	unsigned char ie[24];
++	unsigned char ie[32];
+ 	int l;
+ 
+ 	if (nr == NULL || *nr == 0) /* not provided */
+--- mISDNuser-2.0.19/bridge/bridge.c.orig	2014-10-20 14:18:55.000000000 +0200
++++ mISDNuser-2.0.19/bridge/bridge.c	2020-04-26 17:27:38.799085748 +0200
+@@ -147,7 +147,7 @@
+  */
+ static void ph_control(int sock, int c1, int c2)
+ {
+-	unsigned char data[MISDN_HEADER_LEN+sizeof(int)+sizeof(int)];
++	unsigned char data[MISDN_HEADER_LEN+sizeof(unsigned long)*2];
+ 	struct mISDNhead *hh = (struct mISDNhead *)data;
+ 	int len;
+ 	unsigned long *d = (unsigned long *)(data + MISDN_HEADER_LEN);
