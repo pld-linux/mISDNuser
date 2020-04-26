@@ -1,7 +1,7 @@
 #
 # Conditional build:
 %bcond_without	static_libs	# static library
-%bcond_without	capi		# API 2.0 support
+%bcond_with	capi		# API 2.0 support
 %bcond_without	gui		# Qt based GUI
 #
 Summary:	Userspace part of Modular ISDN stack
